@@ -1,0 +1,14 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+minimumReleaseAgeExclude:
+  - executable-stories-vitest
+  - executable-stories-formatters
+  - executable-stories-react
+
+allowBuilds:
+  esbuild: true
+
+overrides:
+  nanoid@<3.3.18: 3.3.18

@@ -1,0 +1,144 @@
+---
+title: Capabilities
+description: Tools, prompts and resources declare the permission they need, and a caller only ever sees the ones they may use.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Tools, prompts and resources all go through the same gate. Each declares the
+permission it needs, next to the handler that runs.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+const { tool, prompt, resource, server } = authz(policy);
+
+const createServer = server(
+  [
+    tool(
+      'update_case',
+      {
+        permission: 'cases:write',
+        inputSchema: z.object({ id: z.string(), title: z.string() }),
+        audit: ({ id }) => `case:${id}`,
+      },
+      async ({ id, title }, { principal }) => renameCase(id, title, principal),
+    ),
+
+    // A prompt is a tool call somebody else composed, so it costs what that
+    // call costs. A resource is read-only to MCP and still the whole case list.
+    prompt('triage_case', { permission: 'cases:write', argsSchema }, walkThroughRename),
+    resource('cases', { permission: 'cases:read', uri: 'cases://all' }, readCases),
+  ],
+  { name: 'acme', version: '1.0.0', onAudit: (event) => log.info(event) },
+);
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+@server.tool(permission="cases:write")
+def update_case(case_id: str, title: str) -> dict[str, str]: ...
+
+@server.prompt(permission="reports:generate")
+def release_report(version: str) -> str: ...
+
+@server.resource("case://{case_id}", permission="cases:read")
+def case(case_id: str) -> str: ...
+```
+
+Templated resource URIs match by template, so `case://C1234` is checked against
+`case://{case_id}`.
+
+</TabItem>
+</Tabs>
+
+## Absent, rather than hidden
+
+Whatever the caller lacks the permission for is never registered, so it is
+missing from `tools/list`, `prompts/list`, `resources/list` and
+`resources/templates/list`. There is no per-handler check to forget.
+
+Skipping the listing and naming an unregistered capability is refused before
+dispatch with `403 forbidden / policy_denied`, and that denied attempt reaches
+`onDecision`. A probe for a capability somebody was never shown is exactly the
+one worth having in a log.
+
+OAuth scopes do not affect visibility. A permitted capability stays visible when
+the current token needs [step-up](/mcp-authz/concepts/scopes/).
+
+<Aside type="caution" title="Python: a capability nobody priced is refused too">
+`AuthorizedMCPServer` exposes the underlying `.mcp`, so a tool registered
+straight on it skips the decorator that would have priced it. Those are hidden
+from every listing and refused with
+`{"error": "forbidden", "reason": "undeclared_capability"}`. Denying by default
+is what stops that becoming a tool reachable by everyone, with nothing in the
+logs to read.
+</Aside>
+
+## Inside the handler
+
+Each handler takes the capability's arguments and the `Principal` the policy
+produced.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+tool('list_cases', { permission: 'cases:read' }, async (_args, { principal }) =>
+  queryCases({ tenant: principal.domain, drafts: principal.can('cases:write') }),
+);
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mcp_authz import current_principal
+
+@server.tool(permission="cases:read")
+def list_cases() -> list[dict[str, str]]:
+    principal = current_principal()
+    return query_cases(tenant=principal.domain, include_drafts=principal.can("cases:write"))
+```
+
+Calling `current_principal()` outside a request raises `RuntimeError`.
+
+</TabItem>
+</Tabs>
+
+| Field             | What it holds                                                 |
+| ----------------- | ------------------------------------------------------------- |
+| `issuer`          | Exact token issuer; key durable identity with `sub`           |
+| `sub`             | Token subject, unique only within its issuer                  |
+| `email`           | Verified email when the issuer supplies one                   |
+| `domain`          | Workspace domain, when the AS passes `hd` through             |
+| `roles`           | Names of the roles that matched                               |
+| `permissions`     | What those roles grant                                        |
+| `can(permission)` | Honours a `*` grant, so ask this instead of reading the array |
+
+A handler never re-checks the permission it declared, because registration
+already checked it. Call `can` when one handler branches on a second permission,
+such as returning extra fields to an admin.
+
+The package checks the permission the capability declared. Your handler uses the
+principal to constrain its own domain query, which is the part no proxy can do
+for you.
+
+## Audit
+
+`onAudit` is awaited and emits `attempt`, followed by `success`, `failure`, or
+`refused` when a person declined. Each event carries identity, capability,
+permission, resource, timestamp and duration. A rejected sink fails closed
+instead of silently losing the record.
+
+The `audit` callback is what names the resource. The library cannot know that
+`{ id: 'C1234' }` is a case. Your callback does.
+
+## Prompts and resources keep their own namespace
+
+The boot-time check keys prompts and resources as `prompt:triage_case` and
+`resource:cases`, so a prompt sharing a tool's name stays its own entry. A
+server advertises only the kinds it actually has.

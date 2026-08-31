@@ -1,0 +1,125 @@
+---
+title: Human approval
+description: Ask a person before one particular call runs, and put their name in the same audit event as the caller.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Some calls should not run just because somebody holds a permission. Deleting a
+production run, refunding above a threshold, closing a release. Declare it on
+the capability and the call waits for an answer before it runs.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+tool(
+  'delete_case',
+  {
+    permission: 'cases:delete',
+    inputSchema: z.object({ id: z.string(), force: z.boolean().default(false) }),
+    audit: ({ id }) => `case:${id}`,
+    // Only the destructive half of the argument space warrants a person.
+    approval: ({ force }) => force,
+  },
+  deleteCase,
+);
+
+server(definitions, {
+  name: 'acme',
+  version: '1.0.0',
+  onApproval: async (request) => {
+    // request carries who, what tool, and the arguments
+    const reply = await askInSlack('#ops', request);
+    return reply.ok ? { approved: true, by: reply.user } : { approved: false, reason: reply.text };
+  },
+});
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+async def ask_in_slack(request: ApprovalRequest) -> ApprovalDecision:
+    reply = await slack.ask("#ops", request)  # who, what, and the arguments
+    return (
+        ApprovalDecision(True, by=reply.user)
+        if reply.ok
+        else ApprovalDecision(False, reason=reply.text)
+    )
+
+server = AuthorizedMCPServer(..., on_approval=ask_in_slack, approval_timeout=45.0)
+
+@server.tool(permission="cases:delete", approval=lambda args: args.get("force") is True)
+def delete_case(case_id: str, force: bool = False) -> None: ...
+```
+
+</TabItem>
+</Tabs>
+
+`approval` is `true` for every call, or a predicate over the arguments when only
+some of them warrant a person.
+
+## An approval nobody's name is on
+
+`{ approved: true }` does not compile without `by`, and an approval that arrives
+naming nobody is refused at runtime as well.
+
+The type is the first line and not the only one. An adapter written in untyped
+code, or one handing back a JSON reply from a chat tool, can still produce an
+anonymous yes, and that would run a destructive call under an audit trail
+claiming somebody had agreed to it. An approval with no name on it is not a
+second pair of eyes.
+
+The approver's name lands on the `success` audit event beside the caller's. That
+event is the only place both people appear, because the downstream API still
+sees one service account.
+
+<Aside type="caution" title="Silence is a refusal">
+  `approvalTimeoutMs` defaults to 45s, under the 60s idle timeout most proxies ship with. An `onApproval` that
+  throws refuses too, rather than letting the action through on the strength of a Slack outage. An answer
+  arriving after the deadline changes nothing: the caller has already been told no.
+</Aside>
+
+## This is not the permission check again
+
+The caller already holds `cases:delete`. Approval is the separate question of
+whether _this_ call should happen.
+
+It is also the one check here that cannot be a decision about whether to
+register something, because it turns on arguments that do not exist until the
+call. An approval-gated capability therefore stays visible in `tools/list` and
+is refused on invocation, unlike an unpermitted one.
+
+A refusal reaches the handler's place as an `ApprovalRefusedError` carrying the
+capability and, when there was one, the person who declined. The audit event is
+`phase: 'refused'` with `decision: 'deny'`, and its `durationMs` covers the
+wait, so the log shows what a call actually cost rather than what the handler
+did. In Python the caller sees
+`{"error": "forbidden", "reason": "approval_refused"}`.
+
+## A capability with nowhere to ask fails at boot
+
+`server(...)` and `gate(...)` both refuse to wire an `approval` with no
+reachable sink, the same way an unreachable capability refuses to start. Python
+raises at registration. The failure lands at startup rather than at the first
+destructive call.
+
+## Nothing here is durable, and it does not need to be
+
+The caller is still on the other end of an open request, so a process that dies
+mid-question takes the request with it, and the action correctly did not happen.
+Durability is owed once you have told a caller you are done and promised to act
+later, which is a promise this never makes.
+
+If you need approval that outlives the request, keep the same seam. Have
+`onApproval` write a pending row, return
+`{ approved: false, reason: 'ticket appr_123' }`, and add a tool of your own
+that polls it. The store lives in your application, where you can see it, and
+this package stays something you install rather than something you run.
+
+## For tools you did not write
+
+[`gate()`](/mcp-authz/typescript/gate/) takes the same options: an `approval`
+map keyed exactly like `permissions`, plus `onApproval`. Putting a person in
+front of somebody else's destructive tool is the best reason to reach for it.

@@ -1,0 +1,84 @@
+---
+title: Servers you did not write
+description: gate() puts a permission map over an MCP server from another package, given one two-line hook in its builder.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+For an MCP server you already have, from another package or one you are not
+ready to change, whose tools were never declared with a permission.
+
+```python
+# one hook in their builder
+server = options.wrap(MCPServer("theirs")) if options.wrap else MCPServer("theirs")
+```
+
+```python
+from mcp_authz import gate
+
+PERMISSIONS = {
+    "get_case": "testrail:read",
+    "delete_run": "testrail:delete",
+    "prompt:triage_case": "testrail:read",
+    "resource:case://all": "testrail:read",
+}
+
+def build_connector(principal):
+    return their_builder(
+        wrap=lambda server: gate(server, principal, PERMISSIONS),
+    )
+```
+
+The reader never sees `delete_run` in `tools/list`, from a builder that knows
+nothing about any of this.
+
+## A tool with no price throws
+
+A registration with no entry in the map raises `ValueError`, naming the
+capability. Dropping it either way is how a tool nobody priced ends up
+reachable by everyone, or by nobody, with no error to read.
+
+Labels match TypeScript: bare tool names, `prompt:…`, and `resource:…` (the
+resource URI).
+
+## Hide vs disable
+
+The Python MCP SDK has no `disable()` on a registration. For tools and prompts
+that the principal may not use, `gate` registers then calls `remove_tool` /
+`remove_prompt` so they disappear from `list_*`. For resources there is no
+public remove API: unpermitted resources are **never registered**.
+
+Constructor-injected catalogues (`MCPServer(..., tools=[...], resources=[...])`)
+bypass the wrap the same way an unwrapped builder does. Price registration that
+goes through `tool` / `add_tool` / `prompt` / `add_prompt` / `resource` /
+`add_resource`.
+
+## Approval on somebody else's tool
+
+```python
+gate(
+    server,
+    principal,
+    PERMISSIONS,
+    approval={"delete_run": True},
+    on_approval=ask_in_slack,
+)
+```
+
+A capability that asks for a person while no `on_approval` is passed fails at
+registration, rather than at the first destructive call.
+
+The approver receives the bound arguments with the SDK's injected `Context`
+removed, so an adapter can render them into a Slack message without tripping
+over the open session.
+
+<Aside type="caution" title="No audit here yet">
+  TypeScript `gate()` takes `onAudit`, `onAuditError` and `audit`. Python `gate()` takes none of them, so a
+  gated destructive tool leaves no record of who ran it. Wrap the handler yourself until this lands, or use
+  `AuthorizedMCPServer` for capabilities you own.
+</Aside>
+
+<Aside type="tip" title="Same seam as TypeScript">
+  The [TypeScript `gate()` guide](/mcp-authz/typescript/gate/) tells the same wrap-hook story. Decisions mean
+  the same thing; only the SDK registration surface differs.
+</Aside>

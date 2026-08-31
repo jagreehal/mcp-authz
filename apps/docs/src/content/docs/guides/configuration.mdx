@@ -1,0 +1,40 @@
+---
+title: Configuration
+description: The environment a typical deployment reads, and where each value comes from.
+---
+
+Neither package reads the environment or the filesystem. Your application does,
+and passes the values in. This is what a typical deployment ends up with.
+
+| Variable                       | Purpose                                         |
+| ------------------------------ | ----------------------------------------------- |
+| `MCP_PUBLIC_URL`               | URL Claude reaches                              |
+| `OAUTH_ISSUER`                 | Authorization server issuer                     |
+| `OAUTH_AUTHORIZATION_ENDPOINT` | From AS metadata                                |
+| `OAUTH_TOKEN_ENDPOINT`         | Same                                            |
+| `OAUTH_REGISTRATION_ENDPOINT`  | Optional; needed if clients still use DCR       |
+| `OAUTH_JWKS_URI`               | Signing keys                                    |
+| `GOOGLE_WORKSPACE_DOMAIN`      | Optional. Refuse tokens outside your domain     |
+| `MCP_POLICY`                   | Optional. Policy JSON, when not written in code |
+
+Every value except the last two comes off your authorization server. Pass
+`OAUTH_ISSUER` alone to `discoverOAuth` and it reads the endpoints and
+`jwks_uri` for you.
+
+Configure the AS itself first. The ordered steps are in
+[Point your AS at it](/mcp-authz/guides/authorization-server/).
+
+## Policy from the environment
+
+```bash
+MCP_POLICY='{"roles":{"reader":["cases:read"]},
+             "rules":[{"match":{"domain":"acme.com"},"role":"reader"}]}'
+```
+
+```ts
+const policy = definePolicy(JSON.parse(process.env.MCP_POLICY!));
+```
+
+The shape is still validated and the catalogue is still reconciled at boot.
+Permission names lose their compile-time check, because TypeScript never saw
+them. YAML you parsed yourself works the same way.

@@ -1,0 +1,124 @@
+---
+title: Run the example
+description: Mint tokens for Dana, Alice and a stranger with a local dev key, then watch the tool list change per caller.
+---
+
+import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+
+You can watch a caller's tool list change before you configure anything. The
+Node example mints its own tokens with a local dev key, so no authorization
+server has to exist yet.
+
+## In a minute, with no authorization server
+
+<Steps>
+
+1. **Clone and install.**
+
+   ```bash
+   git clone https://github.com/jagreehal/mcp-authz
+   cd mcp-authz
+   pnpm install
+   ```
+
+2. **Start the server and mint two tokens.**
+
+   ```bash
+   pnpm --filter mcp-authz-node-example dev                   # :8200, local dev key
+   pnpm --filter mcp-authz-node-example token dana@acme.com   # reader
+   pnpm --filter mcp-authz-node-example token alice@acme.com  # editor
+   pnpm --filter mcp-authz-node-example token sam@other.com   # nobody
+   ```
+
+3. **Paste one into the MCP Inspector**, under **Authentication → Bearer
+   Token**, and list the tools.
+
+</Steps>
+
+| Token            | `tools/list`                        | `prompts/list` | `update_case`                  |
+| ---------------- | ----------------------------------- | -------------- | ------------------------------ |
+| `dana@acme.com`  | `whoami`, `get_case`                | empty          | not there to call              |
+| `alice@acme.com` | `whoami`, `get_case`, `update_case` | `triage_case`  | works, and audits `case:C1234` |
+| `sam@other.com`  | HTTP 403 `forbidden/policy_denied`  | 403            | —                              |
+
+Dana and Alice both see the `cases://all` resource, because both hold
+`cases:read`. Prompts and resources go through the same gate as tools.
+
+Dana does not have `update_case` _hidden_. It was never registered for her
+request.
+
+## Two more worth trying
+
+```bash
+pnpm --filter mcp-authz-node-example token priya@acme.com --group qa-leads
+pnpm --filter mcp-authz-node-example token alice@acme.com --scope mcp
+```
+
+The first promotes Priya through an IdP group claim, with no policy edit. The
+second shows the second axis: Alice keeps the permission, so `update_case` stays
+visible, and calling it returns `403 insufficient_scope`. A scope gap is
+something the client can re-authorise for, and the challenge says so. A
+permission gap is an administrator's job.
+
+<Aside type="tip" title="What the dev key is and is not">
+  `MCP_DEV_AUTH=1` mints tokens locally and publishes the key that verifies them. It is not a login, and it
+  refuses to start when `NODE_ENV=production`. Everything after the token is the real code path. The key pair
+  is generated on first use into a gitignored `.dev-auth.json`, so nothing secret is committed.
+</Aside>
+
+[`src/e2e.test.ts`](https://github.com/jagreehal/mcp-authz/blob/main/apps/node-example/src/e2e.test.ts)
+asserts every row of that table, so this page cannot quietly stop being true.
+
+## Against a real authorization server
+
+Configure the AS first. It has to accept `resource=<your MCP URL>` and mint
+tokens whose `aud` equals it, or the client finishes the whole OAuth flow and
+never sends the token it just received. The ordered steps are in
+[Point your AS at it](/mcp-authz/guides/authorization-server/).
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```bash
+cp apps/node-example/.env.example apps/node-example/.env
+# fill MCP_PUBLIC_URL and OAUTH_*; optionally set MCP_POLICY
+pnpm --filter mcp-authz-node-example start
+```
+
+Default port `8200`. Add `https://…/mcp` in Claude as a custom connector.
+
+</TabItem>
+<TabItem label="Python">
+
+```bash
+cd apps/python-example
+uv sync
+OAUTH_ISSUER=https://auth.acme.com \
+OAUTH_JWKS_URI=https://auth.acme.com/.well-known/jwks.json \
+MCP_PUBLIC_URL=https://mcp.acme.com/mcp \
+uv run python server.py
+```
+
+With nothing set it defaults to `127.0.0.1:8300`, which is enough to watch it
+refuse an unauthenticated request. Your AS has to issue signed access tokens
+carrying `aud` equal to `MCP_PUBLIC_URL`, `iss` equal to `OAUTH_ISSUER`, plus
+`sub`, `email`, `email_verified: true`, `exp`, the baseline `mcp` scope, and
+`hd: acme.com` for this example's Workspace restriction.
+
+| Token                          | `tools/list`                    | `update_case`             |
+| ------------------------------ | ------------------------------- | ------------------------- |
+| `dana@acme.com`                | `get_case`                      | not there to call         |
+| `alice@acme.com`               | `get_case`, `update_case`       | works                     |
+| `sub: departed-contractor`     | `forbidden/policy_denied`       | `forbidden/policy_denied` |
+| any `hd` other than `acme.com` | 401 before the policy ever runs | 401                       |
+
+The last row is the verifier rather than the policy: `allowed_domain="acme.com"`
+refuses the token outright. Dana's case differs again. She holds a valid token
+and a real role, and `update_case` is filtered out of her listing. Calling the
+name anyway hits the same permission check.
+
+The Node example is the one with the dev-key mode, so reach for it when you want
+to see the behaviour before standing up an authorization server.
+
+</TabItem>
+</Tabs>

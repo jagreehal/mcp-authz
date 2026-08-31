@@ -1,0 +1,53 @@
+---
+title: Servers you did not write
+description: gate() puts a permission map over an MCP server from another package, given one two-line hook in its builder.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+For an MCP server you already have, from another package or one you are not
+ready to change, whose tools were never declared with a permission.
+
+```ts
+// one hook in their builder
+const server = options.wrap ? options.wrap(new McpServer(info, opts)) : new McpServer(info, opts);
+```
+
+```ts
+// your connector
+createServer: (principal) =>
+  buildServer(config, {
+    wrap: (server) =>
+      gate(server, principal, {
+        get_case: 'testrail:read',
+        delete_run: 'testrail:delete',
+      }),
+  }),
+```
+
+The reader never sees `delete_run` in `tools/list`, from a builder that knows
+nothing about any of this. Their calls land in your `onAudit` log, which is the
+only record tying a person to an action when the downstream API sees one service
+account.
+
+## A tool with no price throws
+
+A registration with no entry in the map throws, naming the tool. Dropping it
+either way is how a tool nobody priced ends up reachable by everyone, or by
+nobody, with no error to read.
+
+## Why the hook is required
+
+The SDK keeps a built server's tool list private, so nothing can filter what it
+never saw. That hook is two lines, and it is worth asking an upstream maintainer
+for.
+
+Pass the same map as `permissions` to `createMcpFetch` and the
+[boot-time check](/mcp-authz/concepts/reconciliation/) still covers the roles
+side.
+
+<Aside type="tip" title="The best reason to reach for it">
+  `gate()` takes the same approval options as `authz`: an `approval` map keyed exactly like `permissions`,
+  plus `onApproval`. Putting a person in front of somebody else's destructive tool is worth the two-line hook
+  on its own.
+</Aside>

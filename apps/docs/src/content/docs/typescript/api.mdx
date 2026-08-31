@@ -1,0 +1,138 @@
+---
+title: API reference
+description: createMcpFetch, discoverOAuth, authz, AccessDeniedError, the policy-only entry point and the Node listen helper.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+```bash
+pnpm add mcp-authz @modelcontextprotocol/server
+# optional Node helper
+pnpm add @modelcontextprotocol/node
+```
+
+Node.js 24 or newer. CI covers 24 and 26.
+
+## `createMcpFetch(options)`
+
+Returns `(request: Request) => Promise<Response>`.
+
+| Option              | Purpose                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| `resourceServerUrl` | Public URL Claude reaches, e.g. `https://mcp.acme.com/mcp`     |
+| `oauthMetadata`     | Your AS's RFC 8414 fields, or `await discoverOAuth(issuer)`    |
+| `verifier`          | Built-in JWT/JWKS verification and claim options               |
+| `tokenVerifier`     | Custom SDK verifier, including opaque-token introspection      |
+| `identityFromAuth`  | Map custom `AuthInfo` to an `Identity`                         |
+| `requiredScopes`    | Baseline scopes (default `['mcp']`)                            |
+| `toolScopes`        | Declarative tool name → scope(s) for safe step-up              |
+| `capabilityScopes`  | Tools, prompts and resource URIs → scope(s)                    |
+| `supportedScopes`   | Additional scopes advertised in resource metadata              |
+| `scopesForRequest`  | Advanced `(request, trustedRoute) => scopes` resolver          |
+| `policy`            | `definePolicy(...)`; matching no rule is HTTP 403              |
+| `authorize`         | Async alternative to `policy` for external entitlements        |
+| `resolve`           | Optional: `(identity, principal) => context` to enrich context |
+| `onDecision`        | Awaited allow/deny decision sink                               |
+| `createServer`      | `(context) => McpServer` once per request; see `authz`         |
+| `permissions`       | Optional: the boot-time map, when a factory of yours hides it  |
+| `maxRequestBytes`   | Cap on the post-auth body read that names a capability. 1 MiB  |
+| `legacy`            | 2025 handling; strict `reject` by default                      |
+
+<Aside type="caution">
+  `resourceServerUrl` must be the URL clients actually reach. Advertise anything else and a conforming client
+  will not attach its token to a resource it was not issued for.
+</Aside>
+
+## `discoverOAuth(issuer)`
+
+```ts
+oauthMetadata: await discoverOAuth('https://auth.acme.com'),
+```
+
+Reads the endpoints off the authorization server rather than out of a config
+file, `jwks_uri` included, which leaves the `verifier` block optional. It tries
+the RFC 8414 location first and the OIDC one second, because Auth0 and Google
+publish only the latter. A document declaring a different issuer is refused: its
+endpoints would send your users somewhere else to sign in.
+
+The cost is a fetch during boot. An AS that is down now stops your deploy rather
+than only your logins, so keep passing `oauthMetadata` by hand if you would
+rather own that trade.
+
+### Verifier claims
+
+The built-in JWT verifier requires `email_verified: true` before email or domain
+rules can run. Use `verifier.emailVerifiedClaim` for a provider-specific
+assurance claim, or set `requireEmailVerified: false` only when the issuer
+contract guarantees the email another way. For opaque tokens, pass any
+SDK-compatible `tokenVerifier` plus `identityFromAuth`.
+
+## `definePolicy(spec)`
+
+Covered in full under [Policies](/mcp-authz/concepts/policies/), including
+matching, deny precedence, wildcard vocabularies and `policy.explain`.
+
+## `authz(policy)`
+
+One call binds everything to one policy. Each builder accepts only a permission
+that policy can grant, so `cases:wrtie` is a build error in all three.
+
+```ts
+const { tool, prompt, resource, server } = authz(policy);
+```
+
+See [Capabilities](/mcp-authz/concepts/capabilities/) for what registration
+does, what the handler receives, and how `onAudit` reports it. See
+[Human approval](/mcp-authz/concepts/approval/) for `approval` and `onApproval`.
+
+## `gate(server, principal, permissions)`
+
+A permission map over a server whose tools were never declared with one. See
+[Servers you did not write](/mcp-authz/typescript/gate/).
+
+## Refusing a caller
+
+```ts
+throw AccessDeniedError.notPermitted(email);
+throw AccessDeniedError.noCredential(email, 'a TestRail API key');
+```
+
+The gate turns either one into HTTP `403` with
+`{"error":"forbidden","reason":"policy_denied"}` and the message as
+`error_description`. It carries no Bearer challenge on purpose: a token upgrade
+cannot repair company policy. `error.reason` is `'not_permitted'` or
+`'no_credential'` for your logs. A caller who matches no rule gets the first of
+these before your `resolve` runs.
+
+<Aside type="caution">
+  Throw it from `resolve`, never from `createServer`. The SDK owns factory failures, so a refusal raised in
+  there reaches the caller as a 500 with the reason stripped.
+</Aside>
+
+## `mcp-authz/policy`
+
+The policy half on its own (`definePolicy`, `definePermissions`,
+`createPrincipal`, `Principal`, `Identity`, `reconcile`) with no MCP code in the
+module graph:
+
+```ts
+import { definePolicy, type Identity } from 'mcp-authz/policy';
+```
+
+The decision is `identity → principal → permissions`, and MCP is one surface
+that consumes it. Gating an Agent SDK tool loop or a plain HTTP tool API reuses
+the same policy object and the same file an administrator edits.
+
+This shrinks what you _load_, not what you _install_.
+`@modelcontextprotocol/server` remains a dependency of the package. Splitting it
+out only becomes worth doing if a non-MCP consumer turns up.
+
+## Node listen helper
+
+```ts
+import { listenMcp } from 'mcp-authz/node';
+
+await listenMcp(fetch, { port: 8200, name: 'acme-mcp', info: { resource: url } });
+```
+
+Binds every interface. The bearer gate is the security boundary.

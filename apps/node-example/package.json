@@ -1,0 +1,35 @@
+{
+  "name": "mcp-authz-node-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example remote MCP server using mcp-authz",
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "dev": "MCP_DEV_AUTH=1 tsx watch src/node.ts",
+    "start": "node dist/node.js",
+    "lint": "eslint src",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "token": "MCP_DEV_AUTH=1 tsx src/token.ts"
+  },
+  "dependencies": {
+    "mcp-authz": "workspace:*",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.4.3",
+    "jose": "^6.2.10"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsdown": "^0.22.14",
+    "tsx": "^4.23.12",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

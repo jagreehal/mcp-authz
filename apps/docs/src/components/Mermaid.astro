@@ -1,0 +1,255 @@
+---
+/**
+ * Client-rendered mermaid diagram.
+ *
+ * Pass the source as a prop rather than a slot: mermaid's decision nodes use
+ * `{"..."}`, which MDX would read as an expression.
+ */
+interface Props {
+  chart: string;
+  title?: string;
+}
+
+const { chart, title } = Astro.props;
+---
+
+<figure class="mermaid-figure">
+  {/* Above the diagram: a reader who cannot see the right-hand branches
+      should meet the way out before they meet the truncation. */}
+  <div class="mermaid-bar">
+    <span class="mermaid-hint" aria-hidden="true">Scrolls sideways</span>
+    <button type="button" class="mermaid-expand">Enlarge</button>
+  </div>
+  <div class="mermaid-viewport">
+    <div class="mermaid-scroll">
+      <pre class="mermaid not-content" data-source={chart}>{chart}</pre>
+    </div>
+  </div>
+  {title && <figcaption>{title}</figcaption>}
+</figure>
+
+<script>
+  import mermaid from 'mermaid';
+
+  const nodes = () => [...document.querySelectorAll<HTMLElement>('pre.mermaid')];
+
+  /** Resolve a CSS custom property off the document, so diagrams follow the theme. */
+  const token = (name: string, fallback: string) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
+    fallback;
+
+  async function render() {
+    const targets = nodes();
+    if (targets.length === 0) return;
+
+    for (const target of targets) {
+      target.removeAttribute('data-processed');
+      target.textContent = target.dataset.source ?? target.textContent;
+    }
+
+    const surface = token('--sl-color-bg-inline-code', '#0f1011');
+    const fill = token('--sl-color-gray-6', '#23252a');
+    const border = token('--sl-color-gray-5', '#323334');
+    const text = token('--sl-color-white', '#f7f8f8');
+    const line = token('--sl-color-gray-4', '#62666d');
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      fontFamily: token('--sl-font', 'system-ui, sans-serif'),
+      themeVariables: {
+        darkMode: document.documentElement.dataset.theme !== 'light',
+        background: surface,
+        fontSize: '14px',
+        primaryColor: fill,
+        primaryTextColor: text,
+        primaryBorderColor: border,
+        secondaryColor: fill,
+        tertiaryColor: fill,
+        lineColor: line,
+        textColor: text,
+        edgeLabelBackground: surface,
+        nodeBorder: border,
+        clusterBkg: surface,
+        clusterBorder: border,
+      },
+      flowchart: {
+        curve: 'basis',
+        // Natural size, with the figure scrolling. Fitting a 15-node ladder to
+        // prose width shrinks the labels past reading.
+        useMaxWidth: false,
+        padding: 12,
+        nodeSpacing: 34,
+        rankSpacing: 44,
+      },
+    });
+
+    await mermaid.run({ nodes: targets });
+  }
+
+  /** Flag every scroller that still has diagram to the right of its edge. */
+  function markOverflow() {
+    for (const view of document.querySelectorAll<HTMLElement>('.mermaid-viewport')) {
+      const scroller = view.firstElementChild as HTMLElement | null;
+      if (!scroller) continue;
+      const remaining = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
+      (view.closest('figure') as HTMLElement).dataset.more = String(remaining > 4);
+    }
+  }
+
+  render().then(markOverflow);
+  addEventListener('resize', markOverflow);
+  addEventListener('scroll', markOverflow, { capture: true, passive: true });
+
+  new MutationObserver(() => void render().then(markOverflow)).observe(document.documentElement, {
+    attributeFilter: ['data-theme'],
+  });
+
+  /** One dialog for the page: Escape and the backdrop close it natively. */
+  const dialog = Object.assign(document.createElement('dialog'), {
+    className: 'mermaid-dialog',
+  });
+  document.body.append(dialog);
+  dialog.addEventListener('click', () => dialog.close());
+
+  document.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest?.('.mermaid-expand');
+    if (!button) return;
+    const svg = button.closest('figure')?.querySelector('svg');
+    if (!svg) return;
+
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    // Pin the clone to its drawn width so the dialog never upscales it.
+    const drawn = svg.viewBox.baseVal.width || svg.getBoundingClientRect().width;
+    clone.removeAttribute('height');
+    clone.style.width = `${Math.round(drawn)}px`;
+
+    dialog.replaceChildren(clone);
+    dialog.showModal();
+  });
+</script>
+
+<style is:global>
+  .mermaid-figure {
+    margin: 1.75rem 0;
+    padding: 1.25rem 1rem 0.875rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 10px;
+    background: var(--sl-color-bg-inline-code);
+  }
+
+  .mermaid-bar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+
+  /* A gradient alone reads as nothing when a node fill sits this close to the
+     page background, so the bar says it in words. */
+  .mermaid-hint {
+    display: none;
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .mermaid-figure[data-more='true'] .mermaid-hint {
+    display: inline;
+  }
+
+  .mermaid-viewport {
+    position: relative;
+  }
+
+  /* macOS overlay scrollbars leave no sign that a diagram continues past the
+     prose column. A shadow would vanish into the dark theme, so the cue is a
+     fade to the figure's own background, switched off once the last branch is
+     on screen. */
+  .mermaid-viewport::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    width: 4rem;
+    background: linear-gradient(to left, var(--sl-color-bg-inline-code), rgb(0 0 0 / 0));
+    opacity: 0;
+    transition: opacity 120ms ease;
+    pointer-events: none;
+  }
+
+  .mermaid-figure[data-more='true'] .mermaid-viewport::after {
+    opacity: 1;
+  }
+
+  .mermaid-scroll {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .mermaid-figure pre.mermaid {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: center;
+    /* Hidden until mermaid swaps the source for an SVG. */
+    color: transparent;
+  }
+
+  .mermaid-figure pre.mermaid[data-processed] {
+    color: inherit;
+  }
+
+  .mermaid-figure figcaption {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-3);
+  }
+
+  .mermaid-expand {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--sl-color-gray-3);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .mermaid-expand:hover {
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-4);
+  }
+
+  .mermaid-dialog {
+    width: min(96vw, 1400px);
+    max-width: none;
+    max-height: 92vh;
+    overflow: auto;
+    padding: 1.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 12px;
+    background: var(--sl-color-bg-inline-code);
+  }
+
+  .mermaid-dialog::backdrop {
+    background: rgb(0 0 0 / 0.65);
+    backdrop-filter: blur(2px);
+  }
+
+  /* Natural size, capped to the dialog width. A tall ladder scrolls
+     vertically, which is the direction you read it in anyway. */
+  .mermaid-dialog svg {
+    display: block;
+    margin: 0 auto;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+  }
+</style>

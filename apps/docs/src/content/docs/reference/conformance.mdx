@@ -1,0 +1,44 @@
+---
+title: Conformance
+description: The language-neutral fixtures that keep a policy decision meaning the same thing in TypeScript and Python.
+---
+
+`conformance/v1` is the behavioural interface shared by every mcp-authz
+implementation. A package may use its ecosystem's native types and MCP SDK, and
+it must produce the outcomes recorded there.
+
+The fixtures are versioned independently from the npm and PyPI packages.
+Changing an existing expected outcome is a conformance-breaking change. Add a
+new version when implementations cannot support both meanings at once.
+
+## Fixture groups
+
+| File                       | What it pins                                                                |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `policy/decisions.json`    | Identity-to-principal decisions, deny precedence, claim matching, wildcards |
+| `policy/explanations.json` | Which rules produced each decision                                          |
+| `policy/validation.json`   | Malformed policies that must fail during startup                            |
+| `protocol/scopes.json`     | Scope selection for tools, prompts and resources                            |
+| `protocol/routing.json`    | The trusted 2026 request-routing ladder                                     |
+
+Two implementations can agree on what a caller may do and still disagree about
+why. An index that points at the wrong rule sends an administrator to the wrong
+line, so `explanations.json` pins the derivation as well as the outcome.
+
+## Why the fixtures are the seam
+
+Each language package owns its implementation and native tooling. Both read
+these files rather than copying the behaviour into a second set of assertions,
+which is what keeps a policy decision meaning the same thing in either language.
+
+```bash
+pnpm test:conformance      # TypeScript, src/conformance.test.ts
+pnpm verify:python         # Python, tests/test_conformance.py among the rest
+```
+
+## What is deliberately absent
+
+Approval and per-capability scope step-up have no fixtures. A fixture pins what
+a policy decides about an identity, and neither of those is a policy decision.
+One asks a person about a particular call. The other is an HTTP challenge about
+a token.

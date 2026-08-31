@@ -1,0 +1,134 @@
+---
+title: Python API reference
+description: AuthorizedMCPServer, gate, JwtVerifier, define_policy, current_principal, and what the Python package leaves to npm.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## `AuthorizedMCPServer`
+
+Wraps the SDK's `MCPServer`. Pass the policy, a token verifier and the SDK's
+`AuthSettings`, then decorate capabilities with the permission each needs.
+
+```python
+server = AuthorizedMCPServer(
+    "cases",
+    policy=policy,
+    token_verifier=JwtVerifier(...),
+    auth=AuthSettings(...),
+    on_approval=ask_in_slack,      # optional
+    approval_timeout=45.0,         # optional
+)
+
+@server.tool(permission="cases:write")
+def update_case(case_id: str, title: str) -> dict[str, str]: ...
+
+@server.prompt(permission="reports:generate")
+def release_report(version: str) -> str: ...
+
+@server.resource("case://{case_id}", permission="cases:read")
+def case(case_id: str) -> str: ...
+
+app = server.streamable_http_app(stateless_http=True)
+```
+
+`AuthorizationMiddleware` runs every check, so it sits in the SDK's own
+middleware chain rather than inside your handlers.
+
+<Aside type="caution" title="The .mcp escape hatch is denied by default">
+`AuthorizedMCPServer` exposes the underlying `.mcp`, so a tool registered
+straight on it skips the decorator that would have priced it. Those are hidden
+from every listing and refused with
+`{"error": "forbidden", "reason": "undeclared_capability"}`.
+</Aside>
+
+## `gate(server, principal, permissions, ...)`
+
+For an MCP server somebody else builds. Wrap before registration; see
+[Servers you did not write](/mcp-authz/python/gate/).
+
+```python
+from mcp_authz import gate
+
+gated = gate(
+    server,
+    principal,
+    {"get_case": "testrail:read", "delete_run": "testrail:delete"},
+    approval={"delete_run": True},
+    on_approval=ask_in_slack,
+)
+```
+
+## `define_policy(spec)`
+
+A plain mapping, valid written in code, parsed from `MCP_POLICY`, or loaded from
+YAML you read yourself. The package never touches the environment or the
+filesystem. Full semantics in [Policies](/mcp-authz/concepts/policies/).
+
+`define_policy` validates the whole shape and raises `ValueError` before the
+server starts: unknown fields, empty role names, a rule granting nothing, and a
+role that no `roles` entry defines.
+
+## `JwtVerifier`
+
+| Option                   | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `issuer`                 | Expected `iss`, checked on every token                         |
+| `jwks_uri`               | Signing keys, cached by the client                             |
+| `resource`               | Expected `aud`, your public MCP URL, fragment stripped         |
+| `allowed_domain`         | Optional. Refuse tokens whose `hd` is another Workspace        |
+| `email_claim`            | Claim holding the email. Default `email`                       |
+| `email_verified_claim`   | Provider-specific assurance claim. Default `email_verified`    |
+| `require_email_verified` | Default `True`. Turn it off only when the issuer guarantees it |
+| `algorithms`             | Default `("RS256", "ES256")`. HMAC algorithms are refused      |
+
+It checks signature, issuer, audience, expiry, a stable subject and a verified
+email, then returns the SDK's `AccessToken`. An invalid credential returns
+`None`, which is what the SDK expects, so the standard bearer challenge goes back
+to the client. Verification runs in a worker thread and leaves the event loop
+free.
+
+For opaque tokens or an introspection endpoint, pass any SDK-compatible
+`TokenVerifier` instead. As long as it fills `claims` with `iss`, `sub` and a
+verified email, `identity_from_access_token` maps it into the policy identity
+unchanged.
+
+## `current_principal()`
+
+```python
+from mcp_authz import current_principal
+
+@server.tool(permission="cases:read")
+def list_cases() -> list[dict[str, str]]:
+    principal = current_principal()
+    return query_cases(tenant=principal.domain, include_drafts=principal.can("cases:write"))
+```
+
+Calling it outside a request raises `RuntimeError`. The field table is in
+[Capabilities](/mcp-authz/concepts/capabilities/#inside-the-handler).
+
+## Human approval
+
+```python
+server = AuthorizedMCPServer(..., on_approval=ask_in_slack, approval_timeout=45.0)
+
+@server.tool(permission="cases:delete", approval=lambda args: args.get("force") is True)
+def delete_case(case_id: str, force: bool = False) -> None: ...
+```
+
+`ApprovalDecision(True)` raises without `by`. Declaring `approval` with no
+`on_approval` fails at registration. Full behaviour in
+[Human approval](/mcp-authz/concepts/approval/).
+
+## What this package does not have
+
+The npm package ships an `mcp-authz` binary that explains a decision and
+reconciles a policy from a terminal. There is no Python equivalent, and there
+may never need to be: it reads a JSON policy file, so it already works on yours.
+
+Per-capability OAuth scope step-up is npm-only too, because the official Python
+SDK exposes only global HTTP scope requirements. See
+[Scopes and step-up](/mcp-authz/concepts/scopes/#python-has-one-axis-for-now).
+
+Policy decisions stay identical across the two languages, which is what the
+[conformance fixtures](/mcp-authz/reference/conformance/) pin.

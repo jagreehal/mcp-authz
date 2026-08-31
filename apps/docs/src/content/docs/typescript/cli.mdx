@@ -1,0 +1,60 @@
+---
+title: CLI
+description: Explain a decision and reconcile a policy from a terminal, with no server running.
+---
+
+The npm package ships an `mcp-authz` binary. It reads a JSON policy file, so a
+Python project can use it on the same file.
+
+## `explain`
+
+```bash
+npx mcp-authz explain policy.json --identity alice.json --capabilities caps.json
+```
+
+```text
+alice@acme.com
+
+Matched rules
+  rule 0  domain=acme.com -> reader
+  rule 1  email=alice@acme.com -> editor
+  rule 2  org.groups=qa-leads -> admin
+
+Effective roles
+  reader
+  editor
+  admin
+
+Permissions
+  cases:read
+  cases:write
+  * (every permission)
+
+Capabilities
+  get_case
+  update_case
+  prompt:triage_case
+```
+
+`--identity` takes an `Identity` or a decoded token payload (`iss`, `sub`,
+`email`, `email_verified`, `hd`), or `-` to read one from stdin. It answers a
+what-if, so it trusts the file it is handed rather than verifying a signature.
+
+## `check`
+
+```bash
+npx mcp-authz check policy.json --capabilities caps.json
+```
+
+`check` runs the same reconciliation your server runs at boot, so a capability
+no role can reach fails the pull request rather than the deploy.
+
+It exits 1 on that and on an invalid policy, and 0 on an unused permission,
+which stays a warning because granting a role ahead of the tool that will use it
+is how a staged rollout works.
+
+## In code
+
+`policy.explain(identity)` answers the same question inside a process, and
+nothing on the request path calls it. See
+[Policies](/mcp-authz/concepts/policies/#asking-why).

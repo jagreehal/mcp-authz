@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "unknown top-level field",
+      "policy": { "roles": {}, "rules": [], "default": "allow" },
+      "errorIncludes": "unknown field 'default'"
+    },
+    {
+      "name": "rule names an unknown role",
+      "policy": { "roles": { "reader": ["cases:read"] }, "rules": [{ "role": "raeder" }] },
+      "errorIncludes": "names role 'raeder'"
+    },
+    {
+      "name": "rule grants nothing",
+      "policy": { "roles": {}, "rules": [{ "match": { "domain": "acme.com" } }] },
+      "errorIncludes": "grants nothing"
+    },
+    {
+      "name": "match value has the wrong type",
+      "policy": {
+        "roles": { "reader": ["cases:read"] },
+        "rules": [{ "match": { "domain": 42 }, "role": "reader" }]
+      },
+      "errorIncludes": "match 'domain'"
+    },
+    {
+      "name": "wildcard is mixed with redundant permissions",
+      "policy": { "roles": { "admin": ["*", "cases:read"] }, "rules": [{ "role": "admin" }] },
+      "errorIncludes": "must not list redundant permissions"
+    },
+    {
+      "name": "role permission is absent from the catalogue",
+      "policy": {
+        "permissions": ["cases:read"],
+        "roles": { "editor": ["cases:write"] },
+        "rules": [{ "role": "editor" }]
+      },
+      "errorIncludes": "absent from the permission catalogue"
+    },
+    {
+      "name": "catalogue contains wildcard",
+      "policy": { "permissions": ["*"], "roles": { "admin": ["*"] }, "rules": [{ "role": "admin" }] },
+      "errorIncludes": "concrete permissions"
+    }
+  ]
+}

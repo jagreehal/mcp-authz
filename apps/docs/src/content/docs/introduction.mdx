@@ -1,0 +1,162 @@
+---
+title: What this is
+description: Where mcp-authz fits, what it deliberately leaves to your authorization server, and when one of the neighbouring tools suits you better.
+---
+
+import Mermaid from '../../components/Mermaid.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+**Give an MCP server per-user permissions without deploying an authorization
+system.**
+
+An OAuth 2.1 resource server plus an access policy, as a library you import
+rather than a proxy you deploy. It speaks MCP Streamable HTTP `2026-07-28`.
+
+You bring the authorization server. WorkOS, Stytch and Auth0 all do the job.
+This package never runs consent, client registration or PKCE. It verifies
+tokens whose audience is your public MCP URL, decides what the caller may do,
+and registers only the capabilities they may use.
+
+<Mermaid
+  chart={`flowchart TD
+    SDK["@modelcontextprotocol/server<br/>protocol, transport, OAuth primitives"]
+    AZ["mcp-authz<br/>identity → policy → permitted capabilities"]
+    APP["Your MCP server<br/>tools, prompts, resources"]
+    SDK --> AZ --> APP`}
+  title="One layer, between the SDK you already depend on and the tools you already wrote."
+/>
+
+## Where it fits
+
+Reach for it when you can touch the server's code, or wrap the builder that
+makes it, and the callers are people who already sign in somewhere. Dana reads
+cases, Alice also writes them, and that decision sits next to the handler
+running the query. You install a dependency, and you run nothing new.
+
+Plenty of good tools solve the neighbouring problems. Take one of them when its
+row describes you:
+
+| Approach                       | Example                | What you take on                                                       |
+| ------------------------------ | ---------------------- | ---------------------------------------------------------------------- |
+| MCP gateway                    | agentgateway           | A data-plane component to deploy and keep available                    |
+| Gateway plus policy service    | Permit                 | The gateway, and the policy infrastructure behind it                   |
+| External decision point        | Cerbos                 | A PDP to run, and a call out to it on every decision                   |
+| Relationship-based permissions | Auth0 FGA              | Richer rules than this offers, in a second authorization system        |
+| Framework feature              | FastMCP                | Convenience, tied to that framework                                    |
+| OAuth plumbing                 | official SDK, mcp-auth | Authentication and resource-server mechanics, with no permission model |
+| Embedded dependency            | **mcp-authz**          | One package, and a policy engine that stays small by design            |
+
+<Mermaid
+  chart={`flowchart TD
+    Start["Different people need<br/>different MCP capabilities"] --> Own{"Can you reach the server's code,<br/>or wrap its builder?"}
+    Own -->|no| GW["Gateway in front of it<br/>agentgateway, Permit"]
+    Own -->|yes| Central{"Do you want to run<br/>central authorization infrastructure?"}
+    Central -->|yes| PDP["Decision point or ReBAC store<br/>Cerbos, Auth0 FGA"]
+    Central -->|no| Shape{"Are the rules relationship-shaped?<br/>'owns it', 'leads that project',<br/>'except after 6pm'"}
+    Shape -->|yes| PDP
+    Shape -->|no| Here["<b>mcp-authz</b><br/>roles and permissions,<br/>one dependency, nothing to operate"]`}
+/>
+
+<Aside type="note" title="Two cases need none of this">
+  A stdio server on one laptop already has the OS account as its boundary. A server where every caller gets
+  identical access wants one service credential and no policy.
+</Aside>
+
+<Aside type="caution" title="When not this">
+  URL-only servers need a gateway, because no in-process seam exists to wrap. Relationship-shaped or
+  ABAC-heavy rules belong in Cerbos or Auth0 FGA; call them from
+  [`authorize`](/mcp-authz/typescript/entitlements/) rather than growing `definePolicy`. Orgs that already
+  standardized on a central authz plane should keep that plane and use this library as the MCP-shaped
+  enforcement point, not as a second product.
+</Aside>
+
+## You need one integration seam
+
+The seam you get decides the tool. Owning the source is the best case.
+Wrapping somebody else's builder works too.
+
+<Mermaid
+  chart={`flowchart TD
+    Q["How much of the server can you reach?"]
+    Q -->|"You write the tools"| A["<b>authz()</b><br/>permissions declared on the capability,<br/>names checked by tsc,<br/>catalogue reconciled at boot"]
+    Q -->|"You call somebody else's<br/>builder, and it lets you<br/>wrap the server it makes"| B["<b>gate()</b><br/>a permission map over tools<br/>that were never written for one"]
+    Q -->|"All you have is a URL"| C["A gateway<br/>no in-process seam exists to use"]`}
+/>
+
+Look again at the middle rung. A package you install, whose tools somebody
+else wrote, still works here as long as its builder hands you the server before
+returning it. That hook is two lines, and it is worth asking an upstream
+maintainer for. [`gate()`](/mcp-authz/typescript/gate/) (TypeScript) and
+[`gate()`](/mcp-authz/python/gate/) (Python) show both sides of it.
+
+Without the hook nothing in this package can help you: the SDK keeps a built
+server's tool list private, so no code can filter what it never saw.
+
+## What running in-process buys you
+
+A proxy knows what crosses the protocol boundary, which is a tool name and a
+JSON blob. A library already has your types, your handlers and your domain.
+
+- **Compile-time permission names.** A typo fails the build rather than a
+  request at 3am.
+- **Boot-time reconciliation.** A tool no role can reach fails startup. A
+  permission no tool requires warns. A gateway cannot run this check, because it
+  does not learn your tool list until traffic arrives.
+- **Authorization context inside the handler.** A proxy can decide whether Dana
+  may call `list_cases`. Your application can also constrain which
+  organisation's cases she sees, in the place the query is written.
+- **Audit that names the resource.** The library cannot know that
+  `{ id: 'C1234' }` is a case. Your `audit` callback does.
+- **A person in the loop, on the arguments.** `approval: ({ force }) => force`
+  asks a human before that one call runs, and the answer lands in the same
+  audit event as the caller. A proxy sees `{"force":true}` and cannot tell you
+  it matters.
+- **A scope gap the client can act on.** A proxy sees a refusal and can say
+  only that one happened. The library knows Dana holds `cases:write` and that
+  her token lacks `write`, so the challenge names that scope. She re-authorises
+  for it instead of walking the whole consent dialog again.
+- **Deploys where a proxy cannot.** Vercel, Workers, Lambda, a Next.js route.
+
+## FastMCP and `canAccess`
+
+FastMCP gates a capability with a predicate:
+
+```ts
+canAccess: requireRole('admin');
+canAccess: (auth) => auth?.role === 'admin' && auth?.department === 'engineering';
+```
+
+That runs, and for one rule in one place it is the right amount of machinery.
+
+A predicate carries no vocabulary. TypeScript cannot derive permission names
+from it, startup cannot compare the tools against the roles, and each closure
+agrees with the others only because you kept them in step by hand.
+`definePolicy` hands you one object that the compiler reads and that boot
+reconciles:
+
+- `permission: 'cases:wrtie'` fails `tsc` rather than a request at 3am.
+- A tool requiring `cases:delete` that no role grants refuses to boot.
+- An administrator edits one file instead of eleven closures.
+
+Twenty tools sharing a vocabulary is where this pays. One tool with one rule is
+where it does not.
+
+## Who does what
+
+```
+Claude ──OAuth 2.1 (CIMD/DCR, PKCE, resource=your URL)──▶ authorization server
+                                                           │ signs the human in
+                                                           ▼
+                                                    Google Workspace (OIDC)
+                                                           │ verified email
+                                                           ▼
+                                                  this library: verify, map,
+                                                  call createServer(context)
+```
+
+**We are a resource server.** Verifying tokens is ours. Registering Claude,
+showing consent and running PKCE belongs to an authorization server that
+already exists. Google cannot fill that role by
+itself: it has no client registration for your MCP audience, and it will not
+mint a token whose audience is your MCP endpoint. WorkOS, Stytch and Auth0 do
+both halves, Google Workspace login included.

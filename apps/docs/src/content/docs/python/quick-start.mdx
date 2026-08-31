@@ -1,0 +1,126 @@
+---
+title: Python quick start
+description: Authorization for servers built on the official MCP Python SDK v2, using its own middleware and verifier interfaces.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Authorization for servers built with the official MCP Python SDK v2. It uses the
+SDK's `MCPServer`, `TokenVerifier`, `AccessToken`, `AuthSettings` and
+server-middleware interfaces rather than replacing the protocol stack.
+
+```bash
+pip install mcp-authz   # imports as mcp_authz
+```
+
+Python 3.10 or newer. CI covers 3.10, 3.12 and 3.13.
+
+<Steps>
+
+1. **Define the policy and build the server.**
+
+   ```python
+   from mcp.server.auth.settings import AuthSettings
+   from mcp_authz import AuthorizedMCPServer, JwtVerifier, define_policy
+
+   policy = define_policy({
+       "roles": {
+           "reader": ["cases:read"],
+           "editor": ["cases:read", "cases:write"],
+       },
+       "rules": [
+           {"match": {"domain": "acme.com"}, "role": "reader"},
+           {"match": {"email": "alice@acme.com"}, "role": "editor"},
+       ],
+   })
+
+   server = AuthorizedMCPServer(
+       "cases",
+       policy=policy,
+       token_verifier=JwtVerifier(
+           issuer="https://auth.acme.com",
+           jwks_uri="https://auth.acme.com/.well-known/jwks.json",
+           resource="https://mcp.acme.com/mcp",
+       ),
+       auth=AuthSettings(
+           issuer_url="https://auth.acme.com",
+           resource_server_url="https://mcp.acme.com/mcp",
+           required_scopes=["mcp"],
+       ),
+   )
+   ```
+
+2. **Price every capability.**
+
+   ```python
+   @server.tool(permission="cases:read")
+   def get_case(case_id: str) -> dict[str, str]:
+       return {"id": case_id}
+   ```
+
+3. **Serve it.**
+
+   ```python
+   app = server.streamable_http_app(stateless_http=True)
+   ```
+
+</Steps>
+
+<Aside type="caution">
+  `resource_server_url` must be the URL clients actually reach. Advertise anything else and a conforming
+  client will not attach its token to a resource it was not issued for.
+</Aside>
+
+## Point your authorization server at it
+
+Four steps, in order. Step 2 is the one people skip, and its failure is the
+confusing kind: the client completes the whole OAuth flow, receives a valid
+token, and then never sends it.
+
+<Steps>
+
+1. **Settle the public URL.** `resource_server_url` and the verifier's
+   `resource` both have to be the URL clients dial, path and all. The SDK
+   publishes RFC 9728 metadata naming it. A client that reads a different host
+   there declines to attach its token, and nothing in the logs says "wrong
+   host".
+
+2. **Register that URL at your AS as a resource identifier, with RFC 8707
+   resource indicators enabled.** The client sends
+   `resource=https://mcp.acme.com/mcp`, and your AS has to mint a token whose
+   `aud` equals it. Auth0 models this as an API with an audience. WorkOS and
+   Stytch expose it as the MCP resource server settings. Without it you get a
+   perfectly signed token that `JwtVerifier` refuses.
+
+3. **Define the baseline scope** you pass to `AuthSettings.required_scopes`,
+   usually `mcp`, and grant it to the client.
+
+4. **Check the claims your rules need.** `iss`, `sub`, `aud` and `exp` are
+   always required. Any `email` or `domain` rule also needs `email` and
+   `email_verified: true`. A Workspace `domain` rule reads `hd`, so the AS has to
+   pass it through from Google.
+
+</Steps>
+
+Nothing here discovers AS metadata for you, unlike the TypeScript package. Give
+`JwtVerifier` the `issuer` and `jwks_uri` directly, then add
+`https://mcp.acme.com/mcp` in Claude as a custom connector and sign in.
+
+## When it does not work
+
+| Symptom                                                | Cause                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| Login succeeds, then the client never attaches a token | `resource_server_url` is not the URL the client dialled (step 1)    |
+| 401 on every call, signature verifies fine             | `aud` is not your MCP URL (step 2), or `iss` does not match         |
+| 401 for some people only                               | `email_verified` missing or false, or `hd` outside `allowed_domain` |
+| Capability missing from a listing                      | The principal lacks its permission. Working as designed             |
+| `forbidden/policy_denied` on a direct call             | Same cause, reached by name instead of by listing                   |
+| `forbidden/policy_denied` on every call, listings too  | The caller matched no rule, so they hold nothing. By design         |
+| `forbidden/undeclared_capability`                      | Registered on `.mcp` directly, so no permission prices it           |
+| `forbidden/approval_refused`                           | A person declined, said nothing in time, or approved without a name |
+
+## A runnable server
+
+[`apps/python-example`](https://github.com/jagreehal/mcp-authz/tree/main/apps/python-example)
+includes the token claims your authorization server has to issue. The
+walkthrough is in [Run the example](/mcp-authz/run-the-example/).

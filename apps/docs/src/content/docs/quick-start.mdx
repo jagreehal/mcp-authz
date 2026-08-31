@@ -1,0 +1,206 @@
+---
+title: Quick start
+description: A policy, tools that name the permission they need, and the handler that ties them together.
+---
+
+import { Tabs, TabItem, Steps, Aside, LinkCard } from '@astrojs/starlight/components';
+
+Three pieces: a policy, capabilities that name the permission they need, and the
+handler that ties them together.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```bash
+npm install mcp-authz @modelcontextprotocol/server
+# optional Node helper
+npm install @modelcontextprotocol/node
+```
+
+Node.js 24 or newer. CI covers 24 and 26.
+
+<Steps>
+
+1. **Write the policy.**
+
+   ```ts
+   import { definePolicy } from 'mcp-authz';
+
+   const policy = definePolicy({
+     roles: {
+       reader: ['cases:read'],
+       editor: ['cases:read', 'cases:write'],
+       admin: ['*'],
+     },
+     rules: [
+       { match: { domain: 'acme.com' }, role: 'reader' },
+       { match: { email: 'alice@acme.com' }, role: 'editor' },
+       { match: { claim: { 'https://acme.com/groups': 'qa-leads' } }, role: 'editor' },
+       { match: { sub: 'auth0|departed-contractor' }, deny: true },
+     ],
+   });
+   ```
+
+2. **Declare each capability against a permission.**
+
+   ```ts
+   import { authz } from 'mcp-authz';
+   import { z } from 'zod';
+
+   const { tool, prompt, resource, server } = authz(policy);
+
+   const createServer = server(
+     [
+       tool(
+         'get_case',
+         { permission: 'cases:read', inputSchema: z.object({ id: z.string() }) },
+         async ({ id }, { principal }) => fetchCase(id, principal),
+       ),
+       tool(
+         'update_case',
+         {
+           permission: 'cases:write',
+           inputSchema: z.object({ id: z.string(), title: z.string() }),
+           audit: ({ id }) => `case:${id}`,
+         },
+         async ({ id, title }) => renameCase(id, title),
+       ),
+       prompt(
+         'release_report',
+         { permission: 'cases:write', argsSchema: z.object({ version: z.string() }) },
+         buildReleaseReport,
+       ),
+       resource('case', { permission: 'cases:read', uri: 'case://{id}' }, readCaseResource),
+     ],
+     { name: 'acme', version: '1.0.0', onAudit: (event) => log.info(event) },
+   );
+   ```
+
+3. **Serve it.**
+
+   ```ts
+   import { createMcpFetch, discoverOAuth } from 'mcp-authz';
+
+   const fetch = createMcpFetch({
+     resourceServerUrl: new URL('https://mcp.acme.com/mcp'),
+     oauthMetadata: await discoverOAuth('https://auth.acme.com'),
+     policy,
+     createServer,
+   });
+   ```
+
+   `fetch` is a plain `(Request) => Promise<Response>`, so it drops into a
+   Next.js route, a Worker, or [`listenMcp`](/mcp-authz/typescript/api/#node-listen-helper)
+   on a Node server.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Python">
+
+```bash
+pip install mcp-authz
+```
+
+Python 3.10 or newer. CI covers 3.10, 3.12 and 3.13. The package builds on the
+official `mcp` SDK v2 and imports as `mcp_authz`.
+
+<Steps>
+
+1. **Write the policy.**
+
+   ```python
+   from mcp_authz import define_policy
+
+   policy = define_policy({
+       "roles": {
+           "reader": ["cases:read"],
+           "editor": ["cases:read", "cases:write"],
+       },
+       "rules": [
+           {"match": {"domain": "acme.com"}, "role": "reader"},
+           {"match": {"email": "alice@acme.com"}, "role": "editor"},
+       ],
+   })
+   ```
+
+2. **Build the server around it.**
+
+   ```python
+   from mcp.server.auth.settings import AuthSettings
+   from mcp_authz import AuthorizedMCPServer, JwtVerifier
+
+   server = AuthorizedMCPServer(
+       "cases",
+       policy=policy,
+       token_verifier=JwtVerifier(
+           issuer="https://auth.acme.com",
+           jwks_uri="https://auth.acme.com/.well-known/jwks.json",
+           resource="https://mcp.acme.com/mcp",
+       ),
+       auth=AuthSettings(
+           issuer_url="https://auth.acme.com",
+           resource_server_url="https://mcp.acme.com/mcp",
+           required_scopes=["mcp"],
+       ),
+   )
+   ```
+
+3. **Price every capability, then serve it.**
+
+   ```python
+   @server.tool(permission="cases:read")
+   def get_case(case_id: str) -> dict[str, str]:
+       return {"id": case_id}
+
+   app = server.streamable_http_app(stateless_http=True)
+   ```
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+## What that bought you
+
+A reader never has `update_case` registered, so it does not appear in
+`tools/list`, and there is no per-handler permission check to forget.
+
+An editor does see `update_case` even when the current token lacks its `write`
+scope. Calling it then returns HTTP `403 insufficient_scope`, which a client can
+fix by re-authorising. A reader who names the tool anyway gets
+`403 {"error":"forbidden","reason":"policy_denied"}` with no Bearer challenge,
+because a token upgrade cannot repair company policy.
+
+In TypeScript, `permission: 'cases:wrtie'` is a compile error. Permission names
+come from the policy literal.
+
+<Aside type="caution" title="One setting decides whether any of this works">
+  Your authorization server has to accept `resource=https://mcp.acme.com/mcp` and mint tokens whose `aud`
+  equals that exact URL. Skip it and the client finishes the whole OAuth dance, holds a valid token, and never
+  sends it. The ordered walkthrough is in [Point your AS at it](/mcp-authz/guides/authorization-server/).
+</Aside>
+
+## No backend required
+
+The policy is a plain object. Written inline it is typed. Loaded from the
+environment it is not, and it is still validated and still reconciled at boot.
+
+```bash
+MCP_POLICY='{"roles":{"reader":["cases:read"]},
+             "rules":[{"match":{"domain":"acme.com"},"role":"reader"}]}'
+```
+
+```ts
+const policy = definePolicy(JSON.parse(process.env.MCP_POLICY!));
+```
+
+The library reads neither the environment nor the filesystem. Your application
+loads its configuration however it likes, YAML you parsed yourself included. You still need an IdP for login and tokens. You do not need a
+database for authorization.
+
+<LinkCard
+  title="See it work without an authorization server"
+  description="A local dev key mints tokens for Dana, Alice and a stranger, so you can watch the filtering happen in the MCP Inspector."
+  href="/mcp-authz/run-the-example/"
+/>

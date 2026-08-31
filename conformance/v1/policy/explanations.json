@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "note": "Same policy as decisions.json. That file pins what a policy decides; this one pins why, so an implementation cannot answer the two questions differently. Rule indices are positions in the policy's own rules array, which is what makes an explanation point at the entry an administrator edits.",
+  "policy": {
+    "permissions": ["cases:read", "cases:write", "cases:admin"],
+    "roles": {
+      "reader": ["cases:read"],
+      "editor": ["cases:read", "cases:write"],
+      "lead": ["cases:write"],
+      "admin": ["*"]
+    },
+    "rules": [
+      { "match": { "domain": "acme.com" }, "role": "reader" },
+      { "match": { "email": "alice@acme.com" }, "role": "editor" },
+      { "match": { "claim": { "org.groups": "qa-leads" } }, "role": "lead" },
+      { "match": { "claim": { "https://acme.com/groups": "qa-leads" } }, "role": "lead" },
+      { "match": { "email": "root@example.com" }, "role": "admin" },
+      { "match": { "sub": "blocked-user" }, "deny": true }
+    ]
+  },
+  "cases": [
+    {
+      "name": "one rule matched, and it is named",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-1",
+        "email": "dana@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": {
+        "matched": [{ "index": 0, "roles": ["reader"], "deny": false }],
+        "deniedBy": null,
+        "roles": ["reader"],
+        "permissions": ["cases:read"]
+      }
+    },
+    {
+      "name": "every matching rule is reported, in policy order",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-2",
+        "email": "alice@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": {
+        "matched": [
+          { "index": 0, "roles": ["reader"], "deny": false },
+          { "index": 1, "roles": ["editor"], "deny": false }
+        ],
+        "deniedBy": null,
+        "roles": ["reader", "editor"],
+        "permissions": ["cases:read", "cases:write"]
+      }
+    },
+    {
+      "name": "a dotted claim path names the rule that traversed it",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-3",
+        "email": "lead@example.com",
+        "emailVerified": true,
+        "claims": { "org": { "groups": ["engineering", "qa-leads"] } }
+      },
+      "expected": {
+        "matched": [{ "index": 2, "roles": ["lead"], "deny": false }],
+        "deniedBy": null,
+        "roles": ["lead"],
+        "permissions": ["cases:write"]
+      }
+    },
+    {
+      "name": "a literal namespaced claim names its own rule, not the dotted one",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-4",
+        "email": "lead@example.com",
+        "emailVerified": true,
+        "claims": { "https://acme.com/groups": ["qa-leads"] }
+      },
+      "expected": {
+        "matched": [{ "index": 3, "roles": ["lead"], "deny": false }],
+        "deniedBy": null,
+        "roles": ["lead"],
+        "permissions": ["cases:write"]
+      }
+    },
+    {
+      "name": "a wildcard grant explains as the role carrying it",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-5",
+        "email": "root@example.com",
+        "emailVerified": true,
+        "claims": {}
+      },
+      "expected": {
+        "matched": [{ "index": 4, "roles": ["admin"], "deny": false }],
+        "deniedBy": null,
+        "roles": ["admin"],
+        "permissions": ["*"]
+      }
+    },
+    {
+      "name": "a deny keeps its place among the matches and names itself",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "blocked-user",
+        "email": "alice@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": {
+        "matched": [
+          { "index": 0, "roles": ["reader"], "deny": false },
+          { "index": 1, "roles": ["editor"], "deny": false },
+          { "index": 5, "roles": [], "deny": true }
+        ],
+        "deniedBy": 5,
+        "roles": [],
+        "permissions": []
+      }
+    },
+    {
+      "name": "nothing matched, so there is nothing to explain",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "outsider",
+        "email": "outsider@example.com",
+        "emailVerified": true,
+        "claims": {}
+      },
+      "expected": { "matched": [], "deniedBy": null, "roles": [], "permissions": [] }
+    },
+    {
+      "name": "an unverified email matches no rule, and the explanation says so rather than blaming a deny",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-6",
+        "email": "fake@acme.com",
+        "emailVerified": false,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": { "matched": [], "deniedBy": null, "roles": [], "permissions": [] }
+    }
+  ]
+}

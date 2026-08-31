@@ -1,0 +1,84 @@
+---
+title: Scopes and step-up
+description: Permissions decide what a caller sees. Scopes decide whether this token can invoke it. SEP-2243 step-up keeps the two apart.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Scopes and permissions are two axes on purpose. A scope gap is a `403` the
+client can fix by re-authorising. A permission gap is an administrator's job.
+
+```ts
+toolScopes: {
+  search_docs: 'mcp',
+  update_doc: ['mcp', 'write'],
+},
+```
+
+Use `capabilityScopes` when prompts or resources need step-up too. Keys are a
+bare tool name (or `tool:name`), `prompt:name`, and `resource:<uri>`.
+
+## What each axis controls
+
+Permissions determine capability visibility. Scopes determine whether this token
+can invoke a visible capability. The request order follows: verify the baseline
+token, evaluate the capability's permission, challenge for a missing capability
+scope, then dispatch.
+
+```text
+cases:write permission ✓  +  write scope ✗
+    tools/list            → update_case is visible
+    tools/call            → 403 insufficient_scope, scope="mcp write"
+    client re-authorises  → retry
+```
+
+Insufficient scope becomes HTTP `403` with
+`WWW-Authenticate: … error="insufficient_scope"`, which a conforming client can
+act on. A tool `isError` cannot.
+
+<Aside type="note">
+  An unpermitted caller is never prompted through a futile step-up, because the permission check runs first.
+</Aside>
+
+## Keep the step-up scopes few
+
+A token carries the scopes the person ticked, which can be fewer than the client
+requested. Cloudflare's consent dialog for Wrangler and its API MCP server lets
+somebody drop any optional scope before approving, leaving the required ones
+selected.
+
+Mint a scope per tool and you hand that person forty checkboxes. They clear the
+ones they do not recognise, and the first call behind one of those fails.
+Name a step-up scope after the risk it carries, `write` or `delete`, and let the
+permission sort out which tools sit behind it. Twenty tools share two scopes,
+and the dialog asks two questions somebody can answer.
+
+Declining a scope runs the same trace as the `write` gap under
+[What each axis controls](#what-each-axis-controls). The capability stays in the
+listing because the permission still grants it, and the challenge names the one
+scope to grant, so the client re-authorises for that scope alone.
+
+## The map does double duty
+
+Every scope in `toolScopes`, `capabilityScopes` and `supportedScopes` is
+advertised in protected-resource metadata, so a client can see the full set
+before it asks for anything.
+
+Scope selection happens only after the 2026 request classifier and
+standard-header validation have proved `Mcp-Method` and the decoded `Mcp-Name`
+match the JSON-RPC body. SEP-2243 Base64 sentinel names are decoded before
+lookup, so encoding a name cannot downgrade its scope.
+
+## Python has one axis, for now
+
+The official Python SDK exposes only global HTTP scope requirements.
+`AuthSettings.required_scopes` enforces the baseline scope, and per-capability
+permissions control discovery and invocation.
+
+The shared routing and scope helpers (`classify_scoped_request`,
+`scopes_for_capability`, `decode_mcp_name_header`) pin the intended step-up
+behaviour. The package stops short of double-verifying tokens or patching
+private SDK routes to manufacture transport-level per-capability challenges.
+
+Policy decisions stay identical across the two languages, which is what the
+[conformance fixtures](/mcp-authz/reference/conformance/) pin.

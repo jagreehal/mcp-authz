@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "matching tool route",
+      "headers": { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": "mutate" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "modern", "method": "tools/call", "name": "mutate" }
+    },
+    {
+      "name": "base64 name is trusted only after decoding and comparison",
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "=?base64?bXV0YXRl?="
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "modern", "method": "tools/call", "name": "mutate" }
+    },
+    {
+      "name": "missing required method header",
+      "headers": { "MCP-Protocol-Version": "2026-07-28", "Mcp-Name": "mutate" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "reject", "code": -32020 }
+    },
+    {
+      "name": "dishonest method header",
+      "headers": { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list", "Mcp-Name": "mutate" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "reject", "code": -32020 }
+    },
+    {
+      "name": "missing required name header",
+      "headers": { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "reject", "code": -32020 }
+    },
+    {
+      "name": "dishonest name header",
+      "headers": { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": "echo" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "reject", "code": -32020 }
+    },
+    {
+      "name": "invalid base64 sentinel",
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "=?base64?not canonical!?="
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "mutate",
+          "arguments": {},
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          }
+        }
+      },
+      "expected": { "kind": "reject", "code": -32020 }
+    },
+    {
+      "name": "legacy request has no trusted route",
+      "headers": {},
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "mutate", "arguments": {} }
+      },
+      "expected": { "kind": "legacy" }
+    }
+  ]
+}

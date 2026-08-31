@@ -1,0 +1,54 @@
+---
+title: Boot-time checks
+description: A capability no role can reach fails startup. A permission no capability requires warns.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Pass both a policy and a server built from it, and startup compares the two.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```text
+MCP policy validation failed
+
+Unreachable capability:
+  delete_case
+    requires: cases:delete
+    granted by: no role
+```
+
+</TabItem>
+<TabItem label="Python">
+
+Decorating a capability with a permission that no role grants raises
+`ValueError` at import time, naming the capability:
+
+```text
+Capability 'delete_case' requires 'cases:delete', but no policy role grants it.
+```
+
+</TabItem>
+</Tabs>
+
+An unreachable capability throws, because it is dead code that looks live.
+
+A permission that no capability requires only warns. Granting a role ahead of
+the tool that will use it is how a staged rollout works. In Python that warning
+arrives when you build the app rather than at import.
+
+A gateway cannot run either check. It does not learn your tool list until
+traffic arrives.
+
+## Run it in CI instead of at deploy
+
+```bash
+npx mcp-authz check policy.json --capabilities caps.json
+```
+
+`check` runs the same reconciliation your server runs at boot, so a capability
+no role can reach fails the pull request rather than the deploy. It exits 1 on
+that and on an invalid policy, and 0 on an unused permission.
+
+More in the [CLI reference](/mcp-authz/typescript/cli/).

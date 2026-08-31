@@ -1,0 +1,30 @@
+---
+title: Spec coverage
+description: What this implements of MCP 2026-07-28 and the OAuth RFCs underneath it.
+---
+
+Protocol revision `2026-07-28`.
+
+- Streamable HTTP via `@modelcontextprotocol/server` `createMcpHandler`
+  (stateless, no `Mcp-Session-Id`). Opt in to legacy 2025 handling explicitly;
+  strict `reject` is the default.
+- Standard routing headers are validated against the body before scope
+  selection. Missing or dishonest `Mcp-Method` / `Mcp-Name` is HTTP 400 before
+  any tool is chosen.
+- RFC 9728 Protected Resource Metadata, plus Bearer on every request.
+- RFC 8707 resource indicators. The audience is your public MCP URL.
+- Declarative per-capability scopes with HTTP `403 insufficient_scope` step-up
+  (SEP-2243). Base64 sentinel names are decoded before lookup.
+- Prefer an AS that supports **CIMD**. DCR is deprecated in this revision, and
+  it still works if you publish `registration_endpoint`.
+
+The Python package runs the same policy and routing fixtures. Per-capability
+scope step-up is npm-only, because the official Python SDK exposes only global
+HTTP scope requirements. See
+[Scopes and step-up](/mcp-authz/concepts/scopes/#python-has-one-axis-for-now).
+
+CI covers Node 24 and 26, and Python 3.10, 3.12 and 3.13.
+
+## Licence
+
+MIT, for both packages.

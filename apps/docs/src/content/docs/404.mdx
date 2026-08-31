@@ -1,0 +1,20 @@
+---
+title: Not found
+description: That page does not exist.
+template: splash
+editUrl: false
+pagefind: false
+sitemap:
+  exclude: true
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Nothing lives at that URL. These do.
+
+<CardGrid>
+  <LinkCard title="What this is" href="/mcp-authz/introduction/" />
+  <LinkCard title="Quick start" href="/mcp-authz/quick-start/" />
+  <LinkCard title="TypeScript API" href="/mcp-authz/typescript/api/" />
+  <LinkCard title="Python API" href="/mcp-authz/python/api/" />
+</CardGrid>

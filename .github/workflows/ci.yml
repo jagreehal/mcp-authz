@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'packages/mcp-authz-python/**'
+              - 'apps/python-example/**'
+              - 'conformance/**'
+              - '.github/workflows/ci.yml'
+
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - if: matrix.node-version == 24
+        run: pnpm audit --prod --audit-level high
+      - run: pnpm quality
+      - if: matrix.node-version == 24
+        run: pnpm smoke:npm-package
+
+  python-quality:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install uv
+      - run: uv sync --all-extras --frozen
+        working-directory: packages/mcp-authz-python
+      - run: uvx pip-audit --path .venv/lib/python*/site-packages
+        working-directory: packages/mcp-authz-python
+      - run: uv run ruff check src tests
+        working-directory: packages/mcp-authz-python
+      - run: uv run mypy src tests
+        working-directory: packages/mcp-authz-python
+      - run: uv run pytest
+        working-directory: packages/mcp-authz-python
+      - run: uv build
+        working-directory: packages/mcp-authz-python
+      - run: uv run --no-project python scripts/smoke-python-package.py
+      - run: uv sync --frozen
+        working-directory: apps/python-example
+      - run: uv run python -c "import server"
+        working-directory: apps/python-example

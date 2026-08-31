@@ -1,0 +1,116 @@
+---
+title: Point your AS at it
+description: Five ordered steps at your authorization server. Step 2 is the one people skip, and its failure is the confusing kind.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Configuring the authorization server comes first, and one step of it decides
+whether any of this works.
+
+<Aside type="danger" title="The failure mode to know about">
+  Skip step 2 and the client finishes the whole OAuth dance, holds a valid token, and never sends it. Nothing
+  in the logs says why.
+</Aside>
+
+<Steps>
+
+1.  **Settle the public URL.** `resourceServerUrl` has to be the URL clients
+    dial, path and all. The library publishes RFC 9728 metadata at
+    `/.well-known/oauth-protected-resource/mcp` for an `/mcp` path, and names that
+    same URL as `resource`. A client that reads a different host there declines to
+    attach its token.
+
+2.  **Register that URL at your AS as a resource identifier, with RFC 8707
+    resource indicators enabled.** The client sends
+    `resource=https://mcp.acme.com/mcp`, and your AS has to mint a token whose
+    `aud` equals it. Without it you get a perfectly signed token that this
+    library refuses with 401.
+
+          <Tabs syncKey="as">
+
+    <TabItem label="Auth0">
+
+    Create an **API** whose **Identifier** is exactly `https://mcp.acme.com/mcp`
+    (that value becomes `aud`). Enable **Authorize using Resource Indicator /
+    RFC 8707** for the application that will connect to MCP. Grant the scopes you
+    will advertise (`mcp`, plus any step-up scopes such as `write`).
+
+          </TabItem>
+
+    <TabItem label="WorkOS">
+
+    In AuthKit / MCP resource server settings, register
+    `https://mcp.acme.com/mcp` as the resource. Tokens minted for that connector
+    must carry `aud` equal to that URL. Map Google Workspace (or your IdP) so
+    `email`, `email_verified`, and `hd` reach the access token when your policy
+    uses them.
+
+          </TabItem>
+
+    <TabItem label="Stytch">
+
+    Under Connected Apps / MCP resource server, set the resource identifier to
+    `https://mcp.acme.com/mcp`. Enable resource indicators so the client’s
+    `resource=` parameter is honoured as `aud`. Pass through verified email and
+    Workspace `hd` if your rules match on them.
+
+          </TabItem>
+
+    </Tabs>
+
+3.  **Define the scopes.** The baseline is whatever you pass to `requiredScopes`
+    (default `mcp`), plus one scope for each entry in `toolScopes` or
+    `capabilityScopes`, such as `write`. Grant them to the client. The library
+    advertises the full set as `scopes_supported` in the resource metadata.
+
+4.  **Decide how clients register.** Prefer an AS that supports CIMD. If yours
+    only offers DCR, publish `registration_endpoint` in `oauthMetadata` and treat
+    it as a stopgap: DCR is deprecated in this protocol revision.
+
+5.  **Check the claims your rules need.** `iss`, `sub`, `aud` and `exp` are always
+    required. Any `email` or `domain` rule also needs `email` and
+    `email_verified: true`. A Workspace `domain` rule reads `hd`, so the AS has to
+    pass it through from Google.
+
+</Steps>
+
+## Then hand the library the issuer
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+const fetch = createMcpFetch({
+  resourceServerUrl: new URL(process.env.MCP_PUBLIC_URL!),
+  oauthMetadata: await discoverOAuth(process.env.OAUTH_ISSUER!),
+  policy,
+  createServer,
+});
+```
+
+`discoverOAuth` reads the endpoints and `jwks_uri` off the AS, so the `verifier`
+block stays optional.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+token_verifier = JwtVerifier(
+    issuer=os.environ["OAUTH_ISSUER"],
+    jwks_uri=os.environ["OAUTH_JWKS_URI"],
+    resource=os.environ["MCP_PUBLIC_URL"],
+)
+```
+
+Nothing in the Python package discovers AS metadata for you. Give `JwtVerifier`
+the `issuer` and `jwks_uri` directly. Step 3 collapses to the baseline scope,
+because per-capability step-up is npm-only.
+
+</TabItem>
+</Tabs>
+
+Add `https://mcp.acme.com/mcp` in Claude as a custom connector and sign in.
+
+If something misbehaves, the symptom-to-cause table is in
+[Troubleshooting](/mcp-authz/guides/troubleshooting/).

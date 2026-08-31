@@ -1,0 +1,13 @@
+[project]
+name = "mcp-authz-python-example"
+version = "0.1.0"
+description = "Example remote MCP server using mcp-authz and the official MCP Python SDK"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp-authz",
+  "uvicorn>=0.35,<1",
+]
+
+[tool.uv.sources]
+mcp-authz = { path = "../../packages/mcp-authz-python", editable = true }
+

@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "policy": {
+    "permissions": ["cases:read", "cases:write", "cases:admin"],
+    "roles": {
+      "reader": ["cases:read"],
+      "editor": ["cases:read", "cases:write"],
+      "lead": ["cases:write"],
+      "admin": ["*"]
+    },
+    "rules": [
+      { "match": { "domain": "acme.com" }, "role": "reader" },
+      { "match": { "email": "alice@acme.com" }, "role": "editor" },
+      { "match": { "claim": { "org.groups": "qa-leads" } }, "role": "lead" },
+      { "match": { "claim": { "https://acme.com/groups": "qa-leads" } }, "role": "lead" },
+      { "match": { "email": "root@example.com" }, "role": "admin" },
+      { "match": { "sub": "blocked-user" }, "deny": true }
+    ]
+  },
+  "cases": [
+    {
+      "name": "domain reader",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-1",
+        "email": "dana@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": {
+        "roles": ["reader"],
+        "permissions": ["cases:read"],
+        "can": ["cases:read"],
+        "cannot": ["cases:write"]
+      }
+    },
+    {
+      "name": "overlapping grants form a union",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-2",
+        "email": "alice@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": {
+        "roles": ["reader", "editor"],
+        "permissions": ["cases:read", "cases:write"],
+        "can": ["cases:read", "cases:write"],
+        "cannot": ["cases:admin"]
+      }
+    },
+    {
+      "name": "nested array claim",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-3",
+        "email": "lead@example.com",
+        "emailVerified": true,
+        "claims": { "org": { "groups": ["engineering", "qa-leads"] } }
+      },
+      "expected": {
+        "roles": ["lead"],
+        "permissions": ["cases:write"],
+        "can": ["cases:write"],
+        "cannot": ["cases:read"]
+      }
+    },
+    {
+      "name": "literal namespaced claim beats dotted traversal",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-4",
+        "email": "lead@example.com",
+        "emailVerified": true,
+        "claims": { "https://acme.com/groups": ["qa-leads"] }
+      },
+      "expected": { "roles": ["lead"], "permissions": ["cases:write"], "can": ["cases:write"], "cannot": [] }
+    },
+    {
+      "name": "wildcard grant",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-5",
+        "email": "root@example.com",
+        "emailVerified": true,
+        "claims": {}
+      },
+      "expected": {
+        "roles": ["admin"],
+        "permissions": ["*"],
+        "can": ["cases:read", "cases:write", "cases:admin"],
+        "cannot": []
+      }
+    },
+    {
+      "name": "deny overrides every grant",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "blocked-user",
+        "email": "alice@acme.com",
+        "emailVerified": true,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": { "roles": [], "permissions": [], "can": [], "cannot": ["cases:read", "cases:write"] }
+    },
+    {
+      "name": "unmatched identity gets nothing",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "outsider",
+        "email": "outsider@example.com",
+        "emailVerified": true,
+        "claims": {}
+      },
+      "expected": { "roles": [], "permissions": [], "can": [], "cannot": ["cases:read"] }
+    },
+    {
+      "name": "unverified email cannot grant a domain role",
+      "identity": {
+        "issuer": "https://auth.example.com",
+        "sub": "user-6",
+        "email": "fake@acme.com",
+        "emailVerified": false,
+        "domain": "acme.com",
+        "claims": {}
+      },
+      "expected": { "roles": [], "permissions": [], "can": [], "cannot": ["cases:read"] }
+    }
+  ]
+}

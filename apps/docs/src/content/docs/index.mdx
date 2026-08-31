@@ -1,0 +1,142 @@
+---
+title: mcp-authz
+description: Give an MCP server per-user permissions without deploying an authorization system.
+template: splash
+editUrl: false
+hero:
+  tagline: Dana reads cases. Alice also writes them. Your MCP server can tell them apart, and it costs you one dependency.
+  actions:
+    - text: Quick start
+      link: /mcp-authz/quick-start/
+      variant: primary
+      icon: right-arrow
+    - text: What this is
+      link: /mcp-authz/introduction/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/jagreehal/mcp-authz
+      variant: minimal
+      icon: external
+pagefind: false
+---
+
+import { Card, CardGrid, Tabs, TabItem, LinkCard } from '@astrojs/starlight/components';
+
+An OAuth 2.1 **resource server** plus an access policy, shipped as a library you
+import. You bring the authorization server. This verifies tokens whose audience
+is your public MCP URL, works out what the caller may do, and registers only the
+capabilities they may use.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+const policy = definePolicy({
+  roles: {
+    reader: ['cases:read'],
+    editor: ['cases:read', 'cases:write'],
+  },
+  rules: [
+    { match: { domain: 'acme.com' }, role: 'reader' },
+    { match: { email: 'alice@acme.com' }, role: 'editor' },
+  ],
+});
+
+const { tool, server } = authz(policy);
+
+const createServer = server(
+  [
+    tool('get_case', { permission: 'cases:read', inputSchema }, getCase),
+    tool('update_case', { permission: 'cases:write', inputSchema }, updateCase),
+  ],
+  { name: 'acme', version: '1.0.0' },
+);
+```
+
+Dana calls `tools/list` and sees `get_case`. Alice sees both. `update_case` is
+not hidden from Dana. It was never registered for her request.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+policy = define_policy({
+    "roles": {
+        "reader": ["cases:read"],
+        "editor": ["cases:read", "cases:write"],
+    },
+    "rules": [
+        {"match": {"domain": "acme.com"}, "role": "reader"},
+        {"match": {"email": "alice@acme.com"}, "role": "editor"},
+    ],
+})
+
+server = AuthorizedMCPServer("cases", policy=policy, token_verifier=..., auth=...)
+
+@server.tool(permission="cases:read")
+def get_case(case_id: str) -> dict[str, str]: ...
+
+@server.tool(permission="cases:write")
+def update_case(case_id: str, title: str) -> dict[str, str]: ...
+```
+
+Dana calls `tools/list` and sees `get_case`. Alice sees both. Calling
+`update_case` by name without the permission earns
+`forbidden / policy_denied` rather than a silent empty result.
+
+</TabItem>
+</Tabs>
+
+<CardGrid>
+  <Card title="Typos fail the build" icon="error">
+    Permission names come from the policy literal, so `permission: 'cases:wrtie'` is a compile error in
+    TypeScript rather than a 403 at 3am.
+  </Card>
+  <Card title="Startup catches dead rules" icon="rocket">
+    A capability that no role can reach stops the server booting. A gateway cannot run that check, because it
+    does not learn your tool list until traffic arrives.
+  </Card>
+  <Card title="The principal reaches your handler" icon="puzzle">
+    A proxy can decide whether Dana may call `list_cases`. Your handler can also scope the query to her
+    organisation, in the one place that knows how.
+  </Card>
+  <Card title="Nothing new to operate" icon="approve-check">
+    No sidecar, no policy service, no extra hop. It deploys wherever your server already deploys, including
+    Vercel, Workers and Lambda.
+  </Card>
+</CardGrid>
+
+## Two languages, one meaning
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```bash
+npm install mcp-authz @modelcontextprotocol/server
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```bash
+pip install mcp-authz   # imports as mcp_authz
+```
+
+</TabItem>
+</Tabs>
+
+Both packages run the same versioned conformance fixtures, so a policy decision
+means the same thing in either language. Their releases are independent.
+
+<CardGrid>
+  <LinkCard
+    title="Run it in a minute"
+    description="A local dev key mints tokens for Dana and Alice, so you can watch the filtering without an authorization server."
+    href="/mcp-authz/run-the-example/"
+  />
+  <LinkCard
+    title="Should you use this?"
+    description="The honest comparison against gateways, decision points and framework features, including the cases that need none of them."
+    href="/mcp-authz/introduction/"
+  />
+</CardGrid>

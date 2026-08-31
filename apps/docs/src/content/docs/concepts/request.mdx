@@ -1,0 +1,98 @@
+---
+title: The request ladder
+description: Every check a request passes, in the order it passes them, and why that order was chosen.
+---
+
+import Mermaid from '../../../components/Mermaid.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+<Mermaid
+  chart={`flowchart TD
+    R["POST /mcp"] --> Path{"Path matches<br/>resourceServerUrl?"}
+    Path -->|no| E404["404 naming the path<br/>this server does answer on"]
+    Path -->|yes| Pre["Classify the request and check<br/>Mcp-Method / Mcp-Name against the body"]
+    Pre -->|"headers disagree,<br/>or are missing"| E400["400, before any tool is chosen"]
+    Pre --> Sc["Select the scopes this<br/>capability requires"]
+    Sc --> Bearer{"Baseline token valid?<br/>signature, iss, aud, exp"}
+    Bearer -->|no| E401["401 + WWW-Authenticate<br/>carrying resource_metadata"]
+    Bearer -->|yes| Pol["identity → policy → Principal"]
+    Pol -->|"no rule matched"| E403["403 forbidden / policy_denied<br/>no Bearer challenge"]
+    Pol --> Perm{"Principal holds the<br/>capability's permission?"}
+    Perm -->|no| E403
+    Perm -->|yes| Scope{"Token carries the<br/>capability's scope?"}
+    Scope -->|no| E403S["403 insufficient_scope<br/>the client can re-authorise"]
+    Scope -->|yes| Ctx["resolve() adds tenant,<br/>credentials, request context"]
+    Ctx --> Build["createServer registers only<br/>the capabilities this caller may use"]
+    Build --> Ask{"Does this call ask<br/>for a person?"}
+    Ask -->|no| H
+    Ask -->|"declined, unanswered,<br/>or approved by nobody"| E403A["ApprovalRefusedError,<br/>logged as decision: deny"]
+    Ask -->|approved| H["Handler runs, holding the Principal"]`}
+/>
+
+## Three orderings are deliberate
+
+**Authentication precedes the body read.** Nobody who cannot present a valid
+token gets to make this process parse anything. Choosing a per-capability scope
+means reading the body, because the capability is named in it and not
+trustworthily in a header, and that read happens after the bearer gate.
+
+**Header validation precedes both the permission lookup and scope selection.**
+An untrusted `Mcp-Name` can talk its way into neither a cheaper scope nor
+another capability's permission. Missing, malformed or dishonest routing headers
+are HTTP 400 and never reach a tool. SEP-2243 Base64 sentinel names are decoded
+before lookup, so encoding a name cannot downgrade its scope.
+
+**Permission precedes scope.** An unpermitted caller is never prompted to
+re-authorise for an action your policy will refuse anyway.
+
+## What the body read costs
+
+Only a POST is read, only up to `maxRequestBytes` (1 MiB by default, over it a
+413), and only when its content type is JSON (415 otherwise). A GET carries no
+body to check its headers against, so it is held to the baseline rather than to
+whatever its headers claim.
+
+## The refusals, and what each one means
+
+| Status                          | Meaning                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `404`                           | The path is not the one `resourceServerUrl` names. The error says which is |
+| `400`                           | Routing headers are missing, or they disagree with the body                |
+| `401` + `WWW-Authenticate`      | No valid token. The challenge carries `resource_metadata`                  |
+| `403 forbidden / policy_denied` | The token is fine and the policy says no. No Bearer challenge              |
+| `403 insufficient_scope`        | Permission granted, this token lacks the capability's scope                |
+| `413` / `415`                   | The body is over `maxRequestBytes`, or it is not JSON                      |
+
+<Aside type="note">
+  A `403 policy_denied` carries no Bearer challenge on purpose. Re-authorising gets the caller a fresh token
+  with the same lack of permission, and a client that retries on a challenge would loop.
+</Aside>
+
+## Where the Python package differs
+
+The Python package runs the same ladder as SDK middleware
+(`AuthorizationMiddleware`), so the check sits in the SDK's own chain rather
+than inside your handlers. The verifier returns the SDK's `AccessToken`, and the
+SDK serves the bearer challenge and the protected-resource metadata.
+
+Per-capability scope step-up is npm-only, because the official Python SDK
+exposes only global HTTP scope requirements today. See
+[Scopes and step-up](/mcp-authz/concepts/scopes/).
+
+<Mermaid
+  chart={`flowchart TD
+    R["tools/call, prompts/get,<br/>resources/read, or a listing"] --> V{"JwtVerifier: signature, iss,<br/>aud, exp, verified email"}
+    V -->|invalid| E401["401 bearer challenge,<br/>served by the SDK"]
+    V -->|valid| P["identity_from_access_token<br/>→ policy → Principal"]
+    P -->|"no rule matched"| E403["MCPError carrying<br/>forbidden / policy_denied"]
+    P --> C{"Does this capability<br/>declare a permission?"}
+    C -->|no| E403U["MCPError carrying<br/>forbidden / undeclared_capability"]
+    C -->|yes| Can{"principal.can(permission)"}
+    Can -->|no| E403
+    Can -->|yes| Ask{"Does this call<br/>ask for a person?"}
+    Ask -->|no| Run
+    Ask -->|"declined, unanswered,<br/>or approved by nobody"| E403A["MCPError carrying<br/>forbidden / approval_refused"]
+    Ask -->|approved| Run["Handler runs,<br/>current_principal() available"]
+    Run --> F["Listings come back filtered<br/>to what this caller may use"]`}
+  title="The Python ladder, run as SDK middleware."
+/>

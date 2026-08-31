@@ -1,0 +1,52 @@
+---
+title: Troubleshooting
+description: Symptom to cause, for the failures that do not explain themselves.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+| Symptom                                                | Cause                                                                        |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Login succeeds, then the client never attaches a token | `resourceServerUrl` is not the URL the client dialled (step 1)               |
+| 401 on every call, signature verifies fine             | `aud` is not your MCP URL (step 2), or `iss` does not match                  |
+| 401 for some people only                               | `email_verified` missing or false, or `hd` outside your Workspace            |
+| 403 `forbidden/policy_denied`                          | The token is fine and no rule matched. Working as designed                   |
+| 403 `insufficient_scope`                               | Permission granted, token lacks the capability's scope. Client re-authorises |
+
+</TabItem>
+<TabItem label="Python">
+
+| Symptom                                                | Cause                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| Login succeeds, then the client never attaches a token | `resource_server_url` is not the URL the client dialled (step 1)    |
+| 401 on every call, signature verifies fine             | `aud` is not your MCP URL (step 2), or `iss` does not match         |
+| 401 for some people only                               | `email_verified` missing or false, or `hd` outside `allowed_domain` |
+| Capability missing from a listing                      | The principal lacks its permission. Working as designed             |
+| `forbidden/policy_denied` on a direct call             | Same cause, reached by name instead of by listing                   |
+| `forbidden/policy_denied` on every call, listings too  | The caller matched no rule, so they hold nothing. By design         |
+| `forbidden/undeclared_capability`                      | Registered on `.mcp` directly, so no permission prices it           |
+| `forbidden/approval_refused`                           | A person declined, said nothing in time, or approved without a name |
+
+</TabItem>
+</Tabs>
+
+## Other refusals
+
+| Status | What to look at                                                                  |
+| ------ | -------------------------------------------------------------------------------- |
+| `404`  | The path is not the one `resourceServerUrl` names. The error says which is       |
+| `400`  | Routing headers are missing, or `Mcp-Method` / `Mcp-Name` disagree with the body |
+| `413`  | The JSON-RPC body is over `maxRequestBytes` (1 MiB by default)                   |
+| `415`  | The POST content type is not JSON                                                |
+
+Boot-time failures come with their own message. A capability no role can reach
+throws and names it; see [Boot-time checks](/mcp-authz/concepts/reconciliation/).
+
+## Asking the policy why
+
+Somebody surprised by what they can or cannot do needs the rule, not the
+outcome. `policy.explain` and `npx mcp-authz explain` both point at the rule
+index an administrator edits, without a server running. See [the CLI](/mcp-authz/typescript/cli/).

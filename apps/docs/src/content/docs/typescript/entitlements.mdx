@@ -1,0 +1,99 @@
+---
+title: External entitlements
+description: Read permissions from an IdP, database or policy service, and still keep compile-time permission names.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Use `authorize` instead of `policy` when permissions live somewhere else.
+`definePermissions` preserves compile-time names without inventing a static
+policy, and `createPrincipal` builds the decision safely.
+
+```ts
+import { authz, createPrincipal, definePermissions, type Principal } from 'mcp-authz';
+
+const permissions = definePermissions(['cases:read', 'cases:write'] as const);
+type Permission = (typeof permissions.permissions)[number];
+type Context = { principal: Principal<Permission>; tenant: Tenant };
+
+const { tool, server } = authz(permissions, {
+  principal: (context: Context) => context.principal,
+});
+
+const createServer = server(
+  [tool('whoami', { permission: 'cases:read' }, async (_args, context) => describeTenant(context.tenant))],
+  { name: 'acme', version: '1.0.0' },
+);
+
+const fetch = createMcpFetch({
+  // ...resourceServerUrl, oauthMetadata, verifier
+  authorize: async (identity) => {
+    const grants = await entitlementsFor(identity.issuer, identity.sub);
+    return createPrincipal(identity, grants.roles, grants.permissions);
+  },
+  resolve: async (_identity, principal) => ({
+    principal,
+    tenant: await tenantFor(principal.issuer, principal.sub),
+  }),
+  createServer,
+});
+```
+
+## `resolve` works either way
+
+With a static `policy`, `resolve` still enriches the decision without widening
+it. In both modes the complete context reaches handlers directly, definitions
+stay at module scope, and
+[boot-time reconciliation](/mcp-authz/concepts/reconciliation/) remains
+available for static policies.
+
+Pass `permissions` to `createMcpFetch` only when your own wrapper hides the map
+attached to a built server factory.
+
+## Worked example: a mock PDP
+
+mcp-authz does not depend on Cerbos, Auth0 FGA, or any other policy product.
+Bring your own client. Map their decision into roles and permissions, then call
+`createPrincipal`.
+
+```ts
+type PdpDecision = {
+  roles: string[];
+  permissions: Array<'cases:read' | 'cases:write'>;
+};
+
+/** Stand-in for `cerbos.checkResources` / FGA `listObjects` / your IdP API. */
+async function decideFromPdp(identity: { issuer: string; sub: string }): Promise<PdpDecision> {
+  // Stand-in HTTP shape; swap for your SDK.
+  const response = await globalThis.fetch('https://pdp.acme.internal/v1/decide', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      principal: { id: `${identity.issuer}|${identity.sub}` },
+      resource: { kind: 'mcp', id: 'cases' },
+    }),
+  });
+  if (!response.ok) {
+    return { roles: [], permissions: [] };
+  }
+  return (await response.json()) as PdpDecision;
+}
+
+const mcpFetch = createMcpFetch({
+  // ...resourceServerUrl, oauthMetadata, verifier
+  authorize: async (identity) => {
+    const decision = await decideFromPdp(identity);
+    return createPrincipal(identity, decision.roles, decision.permissions);
+  },
+  createServer,
+});
+```
+
+An empty grant is a deny: the caller gets `403 forbidden / policy_denied`, not a
+session that lists nothing.
+
+<Aside type="note" title="Stay the MCP-shaped enforcement point">
+  When the organisation already runs Cerbos or FGA, keep them as the source of truth. This library verifies
+  the token, asks your PDP, and registers only the capabilities that decision allows. It is not a second
+  authorization system.
+</Aside>

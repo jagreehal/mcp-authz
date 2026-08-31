@@ -1,0 +1,54 @@
+{
+  "name": "mcp-authz-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Authorization for MCP servers: OAuth 2.1 resource server plus a roles/permissions policy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jagreehal/mcp-authz"
+  },
+  "homepage": "https://github.com/jagreehal/mcp-authz#readme",
+  "bugs": {
+    "url": "https://github.com/jagreehal/mcp-authz/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "test:conformance": "pnpm --filter mcp-authz exec vitest run src/conformance.test.ts",
+    "verify:python": "uv --directory packages/mcp-authz-python run ruff check src tests && uv --directory packages/mcp-authz-python run mypy src tests && uv --directory packages/mcp-authz-python run pytest && uv --directory packages/mcp-authz-python build && pnpm smoke:python-package",
+    "type-check": "turbo type-check",
+    "clean": "turbo clean",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "changeset": "changeset",
+    "version-packages": "changeset version && pnpm install --lockfile-only",
+    "release": "pnpm quality && pnpm smoke:npm-package && git diff --exit-code && changeset publish",
+    "smoke:npm-package": "node scripts/smoke-npm-package.mjs",
+    "smoke:python-package": "uv run --no-project python scripts/smoke-python-package.py",
+    "quality": "pnpm build && pnpm lint && pnpm type-check && pnpm test && pnpm format:check"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "eslint": "^10.9.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "tsdown": "^0.22.14",
+    "turbo": "^2.10.11",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.23.0",
+  "author": "Jag Reehal <jag@jagreehal.com> (https://jagreehal.com)",
+  "license": "MIT"
+}

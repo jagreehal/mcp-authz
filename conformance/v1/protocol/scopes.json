@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "baseline": "mcp",
+  "map": {
+    "echo": "mcp",
+    "mutate": "write",
+    "tool:archive": ["write", "archive"],
+    "prompt:triage": "write",
+    "resource:cases://all": "cases:read"
+  },
+  "cases": [
+    { "name": "known tool", "method": "tools/call", "capabilityName": "mutate", "expected": ["write"] },
+    {
+      "name": "prefixed tool",
+      "method": "tools/call",
+      "capabilityName": "archive",
+      "expected": ["write", "archive"]
+    },
+    { "name": "known prompt", "method": "prompts/get", "capabilityName": "triage", "expected": ["write"] },
+    {
+      "name": "known resource",
+      "method": "resources/read",
+      "capabilityName": "cases://all",
+      "expected": ["cases:read"]
+    },
+    {
+      "name": "unknown capability",
+      "method": "tools/call",
+      "capabilityName": "unknown",
+      "expected": ["mcp"]
+    },
+    { "name": "method without a capability name", "method": "tools/list", "expected": ["mcp"] },
+    {
+      "name": "base64 sentinel is decoded before lookup",
+      "method": "tools/call",
+      "headerName": "=?base64?bXV0YXRl?=",
+      "expected": ["write"]
+    }
+  ]
+}

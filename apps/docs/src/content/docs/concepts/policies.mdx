@@ -1,0 +1,171 @@
+---
+title: Policies
+description: Roles, rules, matching, deny precedence, and how to ask a policy why it decided what it decided.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+A policy maps an identity to a set of permissions. It is a plain object, so the
+same shape works written in code, parsed from an environment variable, or loaded
+from YAML you read yourself. Neither package touches the environment or the
+filesystem.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+import { definePolicy, type PermissionOf } from 'mcp-authz';
+
+const policy = definePolicy({
+  roles: {
+    reader: ['cases:read'],
+    editor: ['cases:read', 'cases:write'],
+    admin: ['*'],
+  },
+  rules: [
+    { match: { domain: 'acme.com' }, role: 'reader' },
+    { match: { email: 'alice@acme.com' }, role: 'editor' },
+    { match: { claim: { 'org.groups': 'qa-leads' } }, role: 'editor' },
+    { match: { sub: 'auth0|left-last-march' }, deny: true },
+  ],
+});
+
+export type Permission = PermissionOf<typeof policy>; // 'cases:read' | 'cases:write'
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mcp_authz import define_policy
+
+policy = define_policy({
+    "permissions": ["cases:read", "cases:write"],
+    "roles": {"reader": ["cases:read"], "admin": ["*"]},
+    "rules": [
+        {"match": {"domain": "acme.com"}, "role": "reader"},
+        {"match": {"claim": {"org.groups": "qa-leads"}}, "role": "admin"},
+        {"match": {"sub": "auth0|left-last-march"}, "deny": True},
+    ],
+})
+```
+
+</TabItem>
+</Tabs>
+
+## How a rule matches
+
+Match on `issuer`, `sub`, `email`, `domain`, or any verified `claim`. Claim
+paths are dotted. A scalar must equal, and an array must contain.
+
+Every matching rule applies and the permissions union. One `deny` match beats
+all of them.
+
+Email and domain rules match only when the identity mapper marked the email as
+verified. In Python, `domain` falls back to the part after `@` when the issuer
+passes no `hd` claim.
+
+Stable identities are the pair `(issuer, sub)`, not `sub` alone. Name `issuer`
+in a rule when one policy accepts identities from more than one issuer.
+
+<Aside type="caution" title="Matching no rule means no permissions">
+  No setting changes that. A default that can be widened eventually is, and the failure is silent.
+</Aside>
+
+## Names the compiler checks
+
+Written as a literal in TypeScript, permission names become a string-literal
+union, and every builder accepts only a permission the policy can grant:
+
+```ts
+tool(
+  'update_case',
+  {
+    permission: 'cases:wrtie',
+    //          ^^^^^^^^^^^^^
+    // Type '"cases:wrtie"' is not assignable to
+    // type '"cases:read" | "cases:write"'.
+  },
+  updateCase,
+);
+```
+
+Hand `definePolicy` a parsed `JSON.parse(process.env.MCP_POLICY!)` instead and
+the call still validates the shape and still reconciles at boot. It cannot check
+names TypeScript never saw.
+
+For a wildcard-only policy, declare the concrete vocabulary so the names stay
+compile-time checked:
+
+```ts
+const policy = definePolicy({
+  permissions: ['cases:read', 'cases:write'],
+  roles: { admin: ['*'] },
+  rules: [{ match: { email: 'admin@acme.com' }, role: 'admin' }],
+});
+```
+
+Python treats that optional `permissions` catalogue the same way: a role that
+grants an unlisted permission fails validation, which keeps a wildcard-only
+policy honest.
+
+## Validation happens before the server starts
+
+Both packages validate the whole runtime shape when you define the policy:
+catalogues, roles, permission strings, rules, match fields and claim values.
+Unknown fields, empty role names, a rule that grants nothing, and a role no
+`roles` entry defines all fail. Malformed JSON cannot survive boot and become a
+request-time 500.
+
+## Asking why
+
+The decision tells you what Alice may do. It cannot tell you why, and why is
+what gets asked when somebody is surprised.
+
+<Tabs syncKey="lang">
+<TabItem label="TypeScript">
+
+```ts
+const { principal, matched, deniedBy } = policy.explain(identity);
+```
+
+`matched` carries every rule that fired, each with its index in your `rules`
+array, so the answer points at the line an administrator edits. `deniedBy` is
+set when a deny emptied the grant. Nothing on the request path calls this, so it
+costs a served request nothing.
+
+The [CLI](/mcp-authz/typescript/cli/) answers the same question from a terminal,
+against a JSON policy file, with no server running.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+explanation = policy.explain(identity)
+
+for rule in explanation.matched:
+    print(rule.index, dict(rule.match), rule.roles)   # 0 {'domain': 'acme.com'} ('reader',)
+
+explanation.principal.permissions                     # ('cases:read', 'cases:write')
+explanation.denied_by                                 # the deny that emptied the grant, or None
+```
+
+Each `MatchedRule` carries its index in your own `rules` list, so the answer
+points at the entry an administrator edits. It shares the one matcher with the
+decision, so the two can never disagree. Nothing in the middleware calls it.
+
+For a policy kept as JSON, the npm package ships a CLI that reads the same file
+and prints the same derivation, which saves writing a script:
+
+```bash
+npx mcp-authz explain policy.json --identity alice.json
+```
+
+</TabItem>
+</Tabs>
+
+## Entitlements a config file cannot hold
+
+TypeScript can read entitlements from an IdP, a database or a policy service
+through `authorize` instead of `policy`, and still keep compile-time permission
+names. See [External entitlements](/mcp-authz/typescript/entitlements/).
