@@ -30,6 +30,30 @@ nothing about any of this. Their calls land in your `onAudit` log, which is the
 only record tying a person to an action when the downstream API sees one service
 account.
 
+## Where the principal comes from
+
+The connector above has one in scope because a verifier produced it. When the
+caller was authenticated some other way — a session your gateway already
+validated, or a test — build the `Identity` yourself. Every field the verifier
+would have proved is required, `emailVerified` included, so an unproven email
+cannot quietly satisfy a policy rule that matches on one.
+
+```ts
+import { createPrincipal } from 'mcp-authz';
+
+const principal = createPrincipal(
+  {
+    issuer: 'https://login.acme.com',
+    sub: 'user_123',
+    email: 'dana@acme.com',
+    emailVerified: true,
+    claims: {},
+  },
+  ['reader'],
+  ['testrail:read'],
+);
+```
+
 ## A tool with no price throws
 
 A registration with no entry in the map throws, naming the tool. Dropping it
