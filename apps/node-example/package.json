@@ -22,7 +22,7 @@
     "jose": "^6.2.10"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "tsdown": "^0.22.14",
     "tsx": "^4.23.12",
     "@typescript/native": "npm:typescript@^7.0.2",
