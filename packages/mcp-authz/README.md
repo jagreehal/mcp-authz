@@ -65,20 +65,39 @@ A predicate carries no vocabulary. TypeScript cannot derive the permission names
 
 Twenty tools sharing a vocabulary is where this pays. One tool with one rule is where it does not.
 
+## Deployment
+
+You ship one MCP server process with this library inside it. Claude dials your
+public URL. Your authorization server runs login. TestRail or Jira keeps one
+service credential. Full stack detail is in the
+[docs](https://jagreehal.github.io/mcp-authz/concepts/deployment/).
+
+```mermaid
+flowchart LR
+    Client["MCP client"] -->|"OAuth login, PKCE"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    Client -->|"Bearer token<br/>aud = your MCP URL"| MCP["Your MCP server<br/>mcp-authz"]
+    MCP -->|"service credential"| API["Downstream API"]
+```
+
 ## Who does what
 
-```
-Claude ──OAuth 2.1 (CIMD/DCR, PKCE, resource=your URL)──▶ authorization server
-                                                           │ signs the human in
-                                                           ▼
-                                                    Google Workspace (OIDC)
-                                                           │ verified email
-                                                           ▼
-                                                  this library: verify, map,
-                                                  call createServer(context)
+```mermaid
+flowchart TD
+    Client["MCP client"] -->|"OAuth 2.1, PKCE, resource = MCP URL"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    IdP -->|"verified email, hd, groups"| AS
+    AS -->|"access token, aud = MCP URL"| Client
+    Client -->|"Bearer on POST /mcp"| Lib["mcp-authz"]
+    Lib -->|"createServer(principal)"| App["Your handlers"]
 ```
 
-**We are a resource server, and nothing more.** Verifying tokens is ours. Registering Claude, showing consent and running PKCE belongs to an authorization server that already exists. Google cannot fill that role itself: it has no client registration for your MCP audience, and it will not mint a token whose audience is your MCP endpoint. WorkOS, Stytch and Auth0 all do both halves, including Google Workspace login.
+**We are a resource server, and nothing more.** Verifying tokens is ours.
+Registering Claude, showing consent and running PKCE belongs to an authorization
+server that already exists. Google cannot fill that role itself: it has no
+client registration for your MCP audience, and it will not mint a token whose
+audience is your MCP endpoint. WorkOS, Stytch and Auth0 all do both halves,
+including Google Workspace login.
 
 ## What a request goes through
 

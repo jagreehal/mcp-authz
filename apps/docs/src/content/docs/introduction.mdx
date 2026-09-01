@@ -141,22 +141,23 @@ reconciles:
 Twenty tools sharing a vocabulary is where this pays. One tool with one rule is
 where it does not.
 
-## Who does what
+## Deployment
 
-```
-Claude ──OAuth 2.1 (CIMD/DCR, PKCE, resource=your URL)──▶ authorization server
-                                                           │ signs the human in
-                                                           ▼
-                                                    Google Workspace (OIDC)
-                                                           │ verified email
-                                                           ▼
-                                                  this library: verify, map,
-                                                  call createServer(context)
-```
+You ship one MCP server process with this library inside it. Claude dials your
+public URL. Your authorization server runs login. TestRail or Jira keeps one
+service credential. The full stack, including what each box does and how
+catalogues differ per caller, is in
+[Deployment](/mcp-authz/concepts/deployment/).
 
-**We are a resource server.** Verifying tokens is ours. Registering Claude,
-showing consent and running PKCE belongs to an authorization server that
-already exists. Google cannot fill that role by
-itself: it has no client registration for your MCP audience, and it will not
-mint a token whose audience is your MCP endpoint. WorkOS, Stytch and Auth0 do
-both halves, Google Workspace login included.
+<Mermaid
+  chart={`flowchart LR
+    Client["MCP client"] -->|"OAuth login, PKCE"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    Client -->|"Bearer token<br/>aud = your MCP URL"| MCP["Your MCP server<br/>mcp-authz"]
+    MCP -->|"service credential"| API["Downstream API"]`}
+/>
+
+mcp-authz is the resource server: it verifies tokens and calls
+`createServer(context)`. Consent, client registration, and PKCE belong to the
+authorization server. Google Workspace signs people in but cannot mint a token
+whose audience is your MCP URL. WorkOS, Stytch, and Auth0 cover both halves.
