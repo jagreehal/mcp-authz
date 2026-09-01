@@ -29,6 +29,14 @@ caller would get, and no port is bound.
   an entry that was never there.
 </Aside>
 
+<Aside type="caution" title="Record every branch a configuration can register">
+  A server whose catalogue depends on configuration — a feature flag, a licence tier, an environment variable
+  — registers a different set per deployment. Record it with those switches **on**, or the map is short by
+  exactly the capabilities that only appear in the fuller configuration. `gate()` will refuse to boot when one
+  of them turns up unpriced, which is the safe failure, but it is a failure you meet in the deployment rather
+  than in the test.
+</Aside>
+
 ## The two assertions
 
 ```ts

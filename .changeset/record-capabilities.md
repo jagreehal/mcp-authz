@@ -38,8 +38,9 @@ boot on a capability with no permission, which covers a dependency that adds a
 tool. It cannot see a tool that keeps its name and changes underneath — a
 description carrying injected instructions, or an input schema widened to accept
 more under a permission you already granted. `fingerprints` digests each
-capability's name, description and resolved input schema, so that change fails a
-snapshot on the pull request rather than shipping.
+capability's whole definition as served — a tool's input schema, a prompt's
+arguments, a resource template's URI — so that change fails a snapshot on the
+pull request rather than shipping.
 
 Nothing is enforced at boot: a digest shipped to production is a second source of
 truth that turns a description edit into an outage. The snapshot is the gate, and

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { createMcpFetch } from './handler';
 import { gate } from './gate';
 import { definePolicy } from './policy';
+import { recordCapabilities } from './testing';
 import { authz } from './tools';
 
 /**
@@ -471,5 +472,25 @@ describe('A client that cannot prove who it is', () => {
     await expect(
       connect(handler, await token('dana@acme.com', { audience: 'https://elsewhere.example' })),
     ).rejects.toThrow();
+  });
+});
+
+describe('Building the map this file gates with', () => {
+  it('reads the same capability set the permission map prices', async ({ task }) => {
+    story.init(task, { tags: ['e2e', 'gate'], covers: ['src/testing.ts'] });
+
+    story.given('case-tracker with every capability its configuration can register');
+    story.note(
+      'A catalogue that varies by configuration has to be recorded with the branches on. ' +
+        'Record it with close_run switched off and the map is short by exactly the tool ' +
+        'most worth pricing.',
+    );
+
+    story.when('the capabilities are read off the ungated server');
+    const { names } = await recordCapabilities(() => caseTrackerServer({ extraTool: true }));
+
+    story.then('they are precisely the labels PERMISSIONS gives a price to');
+    story.note('The two vocabularies are written by different code. This is what keeps them one.');
+    expect(names).toEqual(Object.keys(PERMISSIONS).sort());
   });
 });

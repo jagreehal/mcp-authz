@@ -46,6 +46,14 @@ what-if, so it trusts the file it is handed rather than verifying a signature.
 npx mcp-authz check policy.json --capabilities caps.json
 ```
 
+`--capabilities` is the map naming every capability the server registers. Read it
+off the server with [`recordCapabilities`](/mcp-authz/typescript/permission-map/)
+rather than maintaining it by hand.
+
+```text
+npx mcp-authz check policy.json --capabilities caps.json
+```
+
 `check` runs the same reconciliation your server runs at boot, so a capability
 no role can reach fails the pull request rather than the deploy.
 
