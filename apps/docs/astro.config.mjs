@@ -38,6 +38,7 @@ export default defineConfig({
           label: 'Start here',
           items: [
             { label: 'What this is', slug: 'introduction' },
+            { label: 'Deployment', slug: 'concepts/deployment' },
             { label: 'Quick start', slug: 'quick-start' },
             { label: 'Run the example', slug: 'run-the-example' },
           ],
@@ -59,6 +60,8 @@ export default defineConfig({
             { label: 'API reference', slug: 'typescript/api' },
             { label: 'gate(): servers you did not write', slug: 'typescript/gate' },
             { label: 'External entitlements', slug: 'typescript/entitlements' },
+            { label: 'Building the permission map', slug: 'typescript/permission-map' },
+            { label: 'Proxy mode', slug: 'typescript/proxy' },
             { label: 'CLI', slug: 'typescript/cli' },
           ],
         },

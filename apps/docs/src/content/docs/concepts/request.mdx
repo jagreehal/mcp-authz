@@ -10,14 +10,13 @@ import { Aside } from '@astrojs/starlight/components';
   chart={`flowchart TD
     R["POST /mcp"] --> Path{"Path matches<br/>resourceServerUrl?"}
     Path -->|no| E404["404 naming the path<br/>this server does answer on"]
-    Path -->|yes| Pre["Classify the request and check<br/>Mcp-Method / Mcp-Name against the body"]
-    Pre -->|"headers disagree,<br/>or are missing"| E400["400, before any tool is chosen"]
-    Pre --> Sc["Select the scopes this<br/>capability requires"]
-    Sc --> Bearer{"Baseline token valid?<br/>signature, iss, aud, exp"}
+    Path -->|yes| Bearer{"Baseline token valid?<br/>signature, iss, aud, exp"}
     Bearer -->|no| E401["401 + WWW-Authenticate<br/>carrying resource_metadata"]
     Bearer -->|yes| Pol["identity → policy → Principal"]
     Pol -->|"no rule matched"| E403["403 forbidden / policy_denied<br/>no Bearer challenge"]
-    Pol --> Perm{"Principal holds the<br/>capability's permission?"}
+    Pol --> Pre["Classify the request and check<br/>Mcp-Method / Mcp-Name against the body"]
+    Pre -->|"headers disagree,<br/>or are missing"| E400["400, before any tool is chosen"]
+    Pre --> Perm{"Principal holds the<br/>capability's permission?"}
     Perm -->|no| E403
     Perm -->|yes| Scope{"Token carries the<br/>capability's scope?"}
     Scope -->|no| E403S["403 insufficient_scope<br/>the client can re-authorise"]
@@ -31,10 +30,10 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## Three orderings are deliberate
 
-**Authentication precedes the body read.** Nobody who cannot present a valid
-token gets to make this process parse anything. Choosing a per-capability scope
-means reading the body, because the capability is named in it and not
-trustworthily in a header, and that read happens after the bearer gate.
+**Authentication precedes the body read.** The bearer gate runs before anything
+parses the POST body. Choosing a per-capability scope still requires reading
+that body, because the capability name lives in it and not trustworthily in a
+header.
 
 **Header validation precedes both the permission lookup and scope selection.**
 An untrusted `Mcp-Name` can talk its way into neither a cheaper scope nor

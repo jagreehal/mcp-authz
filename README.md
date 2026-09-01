@@ -165,20 +165,39 @@ An editor does see `update_case` even when the current token lacks its `write`
 scope. Calling it then returns HTTP `403 insufficient_scope`; a reader receives
 `403 {"error":"forbidden","reason":"policy_denied"}` with no Bearer challenge.
 
+## Deployment
+
+You ship one MCP server process with this library inside it. Claude dials your
+public URL. Your authorization server runs login. TestRail or Jira keeps one
+service credential. Full stack detail is in the
+[docs](https://jagreehal.github.io/mcp-authz/concepts/deployment/).
+
+```mermaid
+flowchart LR
+    Client["MCP client"] -->|"OAuth login, PKCE"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    Client -->|"Bearer token<br/>aud = your MCP URL"| MCP["Your MCP server<br/>mcp-authz"]
+    MCP -->|"service credential"| API["Downstream API"]
+```
+
+mcp-authz is the resource server: it verifies tokens and calls
+`createServer(context)`. Consent, client registration, and PKCE belong to the
+authorization server. Google Workspace signs people in but cannot mint a token
+whose audience is your MCP URL. WorkOS, Stytch, and Auth0 cover both halves.
+
 ## What a request goes through
 
 ```mermaid
 flowchart TD
     R["POST /mcp"] --> Path{"Path matches<br/>resourceServerUrl?"}
     Path -->|no| E404["404 naming the path<br/>this server does answer on"]
-    Path -->|yes| Pre["Classify the request and check<br/>Mcp-Method / Mcp-Name against the body"]
-    Pre -->|"headers disagree,<br/>or are missing"| E400["400, before any tool is chosen"]
-    Pre --> Sc["Select the scopes this<br/>capability requires"]
-    Sc --> Bearer{"Baseline token valid?<br/>signature, iss, aud, exp"}
+    Path -->|yes| Bearer{"Baseline token valid?<br/>signature, iss, aud, exp"}
     Bearer -->|no| E401["401 + WWW-Authenticate<br/>carrying resource_metadata"]
     Bearer -->|yes| Pol["identity → policy → Principal"]
     Pol -->|"no rule matched"| E403["403 forbidden / policy_denied<br/>no Bearer challenge"]
-    Pol --> Perm{"Principal holds the<br/>capability's permission?"}
+    Pol --> Pre["Classify the request and check<br/>Mcp-Method / Mcp-Name against the body"]
+    Pre -->|"headers disagree,<br/>or are missing"| E400["400, before any tool is chosen"]
+    Pre --> Perm{"Principal holds the<br/>capability's permission?"}
     Perm -->|no| E403
     Perm -->|yes| Scope{"Token carries the<br/>capability's scope?"}
     Scope -->|no| E403S["403 insufficient_scope<br/>the client can re-authorise"]
@@ -190,8 +209,9 @@ flowchart TD
     Ask -->|approved| H["Handler runs, holding the Principal"]
 ```
 
-Permission is checked before scope on purpose. An unpermitted caller never gets
-prompted to re-authorise for an action your policy will refuse anyway.
+Authentication precedes the body read. Permission is checked before scope, so an
+unpermitted caller never gets prompted to re-authorise for an action your policy
+will refuse anyway.
 
 ## What running in-process buys you
 
@@ -286,6 +306,19 @@ pnpm --filter mcp-authz-node-example start
 ```
 
 For Python, see the official-SDK [example](apps/python-example/README.md).
+
+## Skills for coding agents
+
+[`skills/`](skills/) holds reference cards an agent can load when writing against
+this library — the API surface, the label vocabulary, and the mistakes that are
+easy to make and quiet when made.
+
+| Skill                                                                  | Covers                                          |
+| ---------------------------------------------------------------------- | ----------------------------------------------- |
+| [`mcp-authz-authz`](skills/mcp-authz-authz/SKILL.md)                   | Declaring permissions on capabilities you write |
+| [`mcp-authz-gate`](skills/mcp-authz-gate/SKILL.md)                     | Gating a server you did not write               |
+| [`mcp-authz-proxy`](skills/mcp-authz-proxy/SKILL.md)                   | Fronting an upstream reachable only by URL      |
+| [`mcp-authz-permission-map`](skills/mcp-authz-permission-map/SKILL.md) | Recording, pricing and drift-checking the map   |
 
 ## Spec stance (2026-07-28)
 

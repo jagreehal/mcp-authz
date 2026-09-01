@@ -1,11 +1,7 @@
 import {
-  bearerAuthChallengeResponse,
   createMcpHandler,
   getOAuthProtectedResourceMetadataUrl,
-  isJsonContentType,
   oauthMetadataResponse,
-  OAuthError,
-  OAuthErrorCode,
   requireBearerAuth,
   type AuthInfo,
   type McpServer,
@@ -13,8 +9,16 @@ import {
   type OAuthTokenVerifier,
 } from '@modelcontextprotocol/server';
 import { AccessDeniedError, type Identity } from './identity';
+import {
+  emitDecision,
+  permissionForRoute,
+  policyDenied,
+  principalLabel,
+  runScopedGate,
+  type AuthorizationDecisionSink,
+} from './ladder';
 import { reconcile, type Policy, type Principal } from './policy';
-import { classifyScopedRequest, type TrustedMcpRoute } from './routing';
+import { type TrustedMcpRoute } from './routing';
 import { scopesForCapability, type CapabilityScopeMap, type ToolScopeMap } from './scopes';
 import { identityFromAuth, jwksVerifier, type VerifierOptions } from './verifier';
 
@@ -22,18 +26,7 @@ import { identityFromAuth, jwksVerifier, type VerifierOptions } from './verifier
 const CONTEXT_KEY = 'mcp-authz.context';
 const OAUTH_SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
-export type AuthorizationDecisionEvent = {
-  issuer: string;
-  sub: string;
-  email?: string;
-  decision: 'allow' | 'deny';
-  roles: readonly string[];
-  permissions: readonly string[];
-  reason?: string;
-  at: string;
-};
-
-export type AuthorizationDecisionSink = (event: AuthorizationDecisionEvent) => unknown | Promise<unknown>;
+export type { AuthorizationDecisionEvent, AuthorizationDecisionSink } from './ladder';
 
 /**
  * An MCP Streamable HTTP resource server (2026-07-28) with
@@ -127,6 +120,7 @@ export type McpFetchOptions<TContext, P extends string = string> = {
     permissions?: ReadonlyMap<string, string>;
     /** Protocol route to permission, used to distinguish policy denial from scope step-up. */
     routePermissions?: ReadonlyMap<string, string>;
+    routeNameFor?: (kind: 'tool' | 'prompt' | 'resource', name: string) => string | undefined;
     /** Resolve exact and templated protocol routes to their declared permission. */
     permissionForRoute?: (kind: 'tool' | 'prompt' | 'resource', name: string) => string | undefined;
   };
@@ -399,61 +393,32 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       throw error;
     }
 
-    // One classification serves both remaining checks, because both are about a
-    // named capability. Its routing inputs go through the 2026 body↔header
-    // validation ladder, so a dishonest `Mcp-Name` can neither talk its way into
-    // a cheaper scope nor into another capability's permission.
-    //
-    // Only a POST carries a body to check the headers against. Anything else is
-    // held to the baseline rather than to what its unvalidated headers claim.
     const scoped = Boolean(scopeMap || scopesForRequest);
     const routed = Boolean(createServer.permissionForRoute ?? createServer.routePermissions);
-    const classified =
-      (scoped || routed) && request.method.toUpperCase() === 'POST'
-        ? await preflightScopedRequest(request, maxRequestBytes)
-        : undefined;
-    // Strict only when a scope depends on the answer. For a permission lookup
-    // alone the SDK stays the authority on a malformed or legacy request, which
-    // it would otherwise refuse a second way, with a different error.
-    if (classified instanceof Response && scoped) return classified;
-    const preflight = classified instanceof Response ? undefined : classified;
-
-    const routePermission = preflight
-      ? permissionForRoute(createServer.permissionForRoute, createServer.routePermissions, preflight.route)
-      : undefined;
-    if (routePermission && principal && !principal.can(routePermission as P)) {
-      await emitDecision(options.onDecision, principal, 'deny', 'policy_denied');
-      return policyDenied(
-        AccessDeniedError.notPermitted(principalLabel(principal), `the permission '${routePermission}'`),
-      );
-    }
-
-    // Permission before scope, so an unpermitted caller is never prompted
-    // through a step-up for an action the policy will refuse anyway.
-    const scopes =
-      preflight && scoped
-        ? scopeMap
-          ? [
-              ...new Set([
-                ...requiredScopes,
-                ...scopesForCapability(
-                  preflight.route.method,
-                  preflight.route.name,
-                  scopeMap,
-                  requiredScopes[0] ?? 'mcp',
-                ),
-              ]),
-            ]
-          : scopesForRequest!(request, preflight.route)
-        : requiredScopes;
-
-    const missingScopes = scopes.filter((scope) => !auth.scopes.includes(scope));
-    if (missingScopes.length > 0) {
-      return bearerAuthChallengeResponse(
-        new OAuthError(OAuthErrorCode.InsufficientScope, 'Insufficient scope'),
-        { requiredScopes: scopes, resourceMetadataUrl },
-      );
-    }
+    const gateResult = await runScopedGate({
+      request,
+      auth,
+      principal,
+      maxRequestBytes,
+      requiredScopes,
+      scoped,
+      routed,
+      scopeMap,
+      resolveCapabilityScopes: (route) => {
+        if (route.method !== 'resources/read' || !route.name || !scopeMap) return undefined;
+        const registered = createServer.routeNameFor?.('resource', route.name);
+        return registered === undefined
+          ? undefined
+          : scopesForCapability(route.method, registered, scopeMap, requiredScopes[0] ?? 'mcp');
+      },
+      scopesForRequest,
+      resolvePermission: (route) =>
+        permissionForRoute(createServer.permissionForRoute, createServer.routePermissions, route),
+      onDecision: options.onDecision,
+      resourceMetadataUrl,
+    });
+    if (!gateResult.ok) return gateResult.response;
+    const preflight = gateResult.preflight;
 
     let context: TContext;
     try {
@@ -463,11 +428,39 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       throw error;
     }
 
-    return mcp.fetch(request, {
+    const answer = await mcp.fetch(request, {
       authInfo: { ...auth, extra: { ...auth.extra, [contextExtraKey]: context } },
       ...(preflight ? { parsedBody: preflight.body } : {}),
     });
+    return legacy === 'reject' ? explainLegacyRefusal(answer) : answer;
   };
+}
+
+/**
+ * Say what to do about the refusal every new deployment meets first.
+ *
+ * `legacy: 'reject'` is strict on purpose, but no MCP client shipping today can
+ * satisfy it: they all still open with the `initialize` handshake that 2026-07-28
+ * removed. So the first connection anybody makes fails with a bare protocol
+ * error that does not mention that a setting exists, let alone which one. The
+ * refusal stands; it just stops being a riddle.
+ */
+async function explainLegacyRefusal(response: Response): Promise<Response> {
+  if (response.ok) return response;
+  const body = await response.clone().text();
+  if (!body.includes('Unsupported protocol version')) return response;
+
+  let payload: { error?: { message?: string } };
+  try {
+    payload = JSON.parse(body) as { error?: { message?: string } };
+  } catch {
+    return response;
+  }
+  if (typeof payload.error?.message !== 'string') return response;
+
+  payload.error.message +=
+    ". No MCP client currently ships without the initialize handshake, so this refuses every client available today. Set legacy: 'stateless' to serve them.";
+  return Response.json(payload, { status: response.status, headers: response.headers });
 }
 
 function routeFromScopeKey(key: string): { kind: 'tool' | 'prompt' | 'resource'; name: string } {
@@ -476,52 +469,6 @@ function routeFromScopeKey(key: string): { kind: 'tool' | 'prompt' | 'resource';
     if (key.startsWith(prefix)) return { kind, name: key.slice(prefix.length) };
   }
   return { kind: 'tool', name: key };
-}
-
-function policyDenied(error: AccessDeniedError): Response {
-  return Response.json(
-    { error: 'forbidden', reason: 'policy_denied', error_description: error.message },
-    { status: 403 },
-  );
-}
-
-function permissionForRoute(
-  resolver: ((kind: 'tool' | 'prompt' | 'resource', name: string) => string | undefined) | undefined,
-  permissions: ReadonlyMap<string, string> | undefined,
-  route: TrustedMcpRoute,
-): string | undefined {
-  if (!route.name || (!resolver && !permissions)) return undefined;
-  const kind =
-    route.method === 'tools/call'
-      ? 'tool'
-      : route.method === 'prompts/get'
-        ? 'prompt'
-        : route.method === 'resources/read'
-          ? 'resource'
-          : undefined;
-  return kind ? (resolver?.(kind, route.name) ?? permissions?.get(`${kind}:${route.name}`)) : undefined;
-}
-
-async function emitDecision<P extends string>(
-  sink: AuthorizationDecisionSink | undefined,
-  principal: Principal<P>,
-  decision: 'allow' | 'deny',
-  reason?: string,
-): Promise<void> {
-  await sink?.({
-    issuer: principal.issuer,
-    sub: principal.sub,
-    email: principal.email,
-    decision,
-    roles: principal.roles,
-    permissions: principal.permissions,
-    ...(reason ? { reason } : {}),
-    at: new Date().toISOString(),
-  });
-}
-
-function principalLabel(principal: Pick<Principal, 'issuer' | 'sub' | 'email'>): string {
-  return principal.email ?? `${principal.issuer}#${principal.sub}`;
 }
 
 function isPrincipal(value: unknown): value is Principal<string> {
@@ -540,104 +487,4 @@ function isPrincipal(value: unknown): value is Principal<string> {
     candidate.permissions.every((permission) => typeof permission === 'string') &&
     typeof candidate.can === 'function'
   );
-}
-
-type ScopedPreflight = { body: unknown; route: TrustedMcpRoute };
-
-async function preflightScopedRequest(
-  request: Request,
-  maxBytes: number,
-): Promise<ScopedPreflight | Response> {
-  // The capability is named in the body, not trustworthily in a header, so
-  // deciding either its scope or its permission means reading it. The bearer
-  // gate has already run by the time this does, so the cap bounds an
-  // authenticated caller rather than anyone who can reach the port.
-  if (!isJsonContentType(request.headers.get('content-type'))) {
-    return protocolError(415, -32_000, 'Per-capability scopes require an application/json body.');
-  }
-
-  const raw = await readCapped(request, maxBytes);
-  if (raw === undefined) {
-    return protocolError(413, -32_000, `Request body exceeds the ${maxBytes} byte limit.`);
-  }
-
-  let body: unknown;
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    return protocolError(400, -32_700, 'Parse error: the request body is not valid JSON');
-  }
-
-  const route = classifyScopedRequest(request, body);
-  if (route.kind === 'reject') {
-    return protocolError(route.httpStatus, route.code, route.message, route.data, route.id);
-  }
-  if (route.kind !== 'modern') {
-    return protocolError(
-      400,
-      -32_020,
-      'Per-capability scopes require a 2026-07-28 request with matching MCP routing headers.',
-      undefined,
-      requestId(body),
-    );
-  }
-  return { body, route };
-}
-
-function requestId(body: unknown): string | number | null {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
-  const id = (body as { id?: unknown }).id;
-  return typeof id === 'string' || typeof id === 'number' ? id : null;
-}
-
-function protocolError(
-  status: number,
-  code: number,
-  message: string,
-  data?: unknown,
-  id: string | number | null = null,
-): Response {
-  return Response.json(
-    { jsonrpc: '2.0', error: { code, message, ...(data === undefined ? {} : { data }) }, id },
-    { status },
-  );
-}
-
-/**
- * The body as text, or `undefined` when it is over the cap.
- *
- * Reads the clone chunk by chunk and stops at the limit rather than buffering
- * first and measuring after, because measuring after is how an unauthenticated
- * caller decides how much memory this process spends.
- */
-async function readCapped(request: Request, maxBytes: number): Promise<string | undefined> {
-  const declared = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) return undefined;
-
-  const body = request.clone().body;
-  if (!body) return '';
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      // Not awaited: `clone()` tees the body, and cancelling one branch blocks
-      // until the other is read, which is never — the request is being refused.
-      void reader.cancel().catch(() => {});
-      return undefined;
-    }
-    chunks.push(value);
-  }
-
-  const joined = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return new TextDecoder().decode(joined);
 }

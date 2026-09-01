@@ -1,0 +1,14 @@
+name = "mcp-authz-proxy-example"
+main = "dist/worker.js"
+compatibility_date = "2024-09-01"
+
+[vars]
+# Public URL of this proxy (token audience).
+MCP_PUBLIC_URL = "https://mcp-proxy.example.com/mcp"
+OAUTH_ISSUER = "https://auth.example.com"
+OAUTH_AUTHORIZATION_ENDPOINT = "https://auth.example.com/authorize"
+OAUTH_TOKEN_ENDPOINT = "https://auth.example.com/token"
+OAUTH_JWKS_URI = "https://auth.example.com/.well-known/jwks.json"
+UPSTREAM_URL = "https://vendor.example.com/mcp"
+
+# Set UPSTREAM_TOKEN as a secret: wrangler secret put UPSTREAM_TOKEN

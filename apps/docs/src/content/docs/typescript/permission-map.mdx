@@ -1,0 +1,187 @@
+---
+title: Building the permission map
+description: Read the capability list off your own server, and catch a capability that changes under an unchanged name.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A permission map has to name every capability a server registers.
+[`gate()`](/mcp-authz/typescript/gate/) throws at boot on one it cannot find, and
+[`check --capabilities`](/mcp-authz/typescript/cli/) reconciles the map you hand
+it. Neither produces that map — until now you wrote it by hand, and a hand-written
+list drifts from the server quietly.
+
+`mcp-authz/testing` reads it off the server instead.
+
+```ts
+import { recordCapabilities } from 'mcp-authz/testing';
+
+const { names, fingerprints } = await recordCapabilities(() => buildServer(TEST_CONFIG));
+```
+
+It builds your server, connects a client to it over an in-memory transport, and
+lists tools, prompts, resources and resource templates. The answer is the one a
+caller would get, and no port is bound.
+
+<Aside type="caution" title="Build it ungated">
+  Pass a factory that does **not** wrap with `gate()`. A gated server answers per principal, so listing one
+  hands you a map missing exactly the capabilities that most need a price — and `reconcile` cannot object to
+  an entry that was never there.
+</Aside>
+
+<Aside type="caution" title="Record every branch a configuration can register">
+  A server whose catalogue depends on configuration — a feature flag, a licence tier, an environment variable
+  — registers a different set per deployment. Record it with those switches **on**, or the map is short by
+  exactly the capabilities that only appear in the fuller configuration. `gate()` will refuse to boot when one
+  of them turns up unpriced, which is the safe failure, but it is a failure you meet in the deployment rather
+  than in the test.
+</Aside>
+
+## The two assertions
+
+```ts
+it('prices every capability, and none has changed underneath', async () => {
+  const { names, fingerprints } = await recordCapabilities(() => buildServer(TEST_CONFIG));
+
+  expect(names).toEqual(Object.keys(PERMISSIONS).sort());
+  expect(fingerprints).toMatchSnapshot();
+});
+```
+
+`names` uses the same labels `gate()` does: the bare name for a tool, `prompt:`
+and `resource:` for the rest, resource templates included. So the first line is
+the completeness check, in the vocabulary the map is already written in.
+
+## Starting the map
+
+```ts
+import { toPermissionsModule } from 'mcp-authz/testing';
+
+writeFileSync('src/permissions.ts', toPermissionsModule(record));
+```
+
+It returns TypeScript source rather than writing a file, so you choose where it
+lands. What it emits is `as const` with the derived permission type, which is
+why this is a `.ts` file and not JSON: `gate()` infers its permission union from
+the literal, so a renamed tool or a typo'd permission is a compile error.
+
+```ts
+export const PERMISSIONS = {
+  get_case: 'TODO:unassigned',
+  'prompt:triage': 'TODO:unassigned',
+  'resource:case': 'TODO:unassigned',
+} as const;
+
+export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+```
+
+When the server serves resources the module carries a third export, mapping each
+`resource:` label to the URI or template it answers on:
+
+```ts
+export const RESOURCE_URIS = {
+  'resource:case': 'cases://case/{id}',
+} as const;
+```
+
+`gate()` never needs it — the SDK routes a read to the registration that claimed
+the URI. [`createMcpProxy`](/mcp-authz/typescript/proxy/) does, because a
+`resources/read` carries a URI and never a label, and a proxy has no
+registrations to route against. It refuses to boot without one for every priced
+resource.
+
+Every capability is priced `TODO:unassigned`, and no role grants it, so
+[reconciliation](/mcp-authz/concepts/reconciliation/) reports it unreachable and
+the boot refuses. The file is deliberately useless until a person has said what
+each capability costs. Generate it once; after that it is source you edit, not
+an artefact you regenerate.
+
+<Aside type="note" title="Why permissions are not guessed">
+  A tool declares `readOnlyHint` and `destructiveHint`, and it is tempting to map those to a permission. The
+  MCP specification is explicit that annotations are hints, not guarantees, and that clients should never make
+  tool-use decisions from annotations on an untrusted server. Seeding a permission from one would let the
+  server being priced decide its own access level.
+</Aside>
+
+## Running it in CI
+
+There is nothing to wire. Both assertions live in your test suite, so the job you
+already run is the gate:
+
+```yaml
+- run: pnpm test
+```
+
+A capability added upstream fails the first assertion, naming it. A capability
+that changed underneath fails the snapshot, and the diff shows which field moved
+— so the pull request that bumps the dependency is the one that stops, rather
+than the deploy that follows it.
+
+Accepting a change is deliberate:
+
+```bash
+pnpm vitest -u    # re-record, then review the snapshot diff like any other change
+```
+
+That review is the point. A snapshot updated without reading it is the same as no
+snapshot, so treat a fingerprint diff the way you would treat a change to the
+permission map itself.
+
+### A server you only have a URL for
+
+The recipe above assumes a test suite, which a server you did not write is not
+part of. Record it, and check it from CI directly:
+
+```bash
+npx mcp-authz record --upstream https://vendor.example/mcp --token $TOKEN --out src/permissions.ts
+npx mcp-authz record --upstream https://vendor.example/mcp --token $TOKEN --check src/permissions.ts
+```
+
+The generated module carries a `FINGERPRINTS` export beside `PERMISSIONS` — a
+separate export, because `gate()` takes the flat map and CI needs a baseline it
+can compare with no test runner involved. The check exits non-zero and says what
+moved:
+
+```text
+The server no longer matches the recorded capabilities:
+
+  + update_case
+      never priced, so nobody decided who may reach it
+  ~ get_case
+      same name, different definition than the one recorded
+```
+
+Reading an upstream is not enforcing it. This tells you a vendor changed their
+capability surface; what to do about it is still yours to decide.
+
+## What the fingerprints catch
+
+`gate()` refuses to boot on a capability it has no price for, which covers a
+dependency that adds a tool. It cannot see a capability that keeps its name and
+changes underneath: a description that grows an instruction, an input schema
+widened to accept more under a permission you already granted, a prompt that
+takes a new argument, a resource template that matches URIs it never used to.
+
+Each fingerprint digests the capability's whole definition as served — not a
+chosen handful of fields, because picking fields by hand means the next kind of
+change is the one nobody fingerprinted. Key order is sorted away first, so a
+definition emitted in a different order does not churn the snapshot.
+
+Under a snapshot, a change of that kind arrives as a reviewable diff on the pull
+request, and accepting one is a deliberate update. That is where the decision
+belongs.
+
+<Aside type="note" title="Nothing is enforced at boot">
+  Digests stay out of production on purpose. Shipping them would mean a second source of truth to keep
+  current, and would turn an ordinary description edit into an outage. Your lockfile pins what runs; the
+  snapshot guards what changes.
+</Aside>
+
+## Installing
+
+`@modelcontextprotocol/client` is an optional peer dependency, needed only by
+this subpath. A production install still pulls two dependencies.
+
+```bash
+npm install -D @modelcontextprotocol/client
+```

@@ -1,0 +1,149 @@
+---
+title: Deployment
+description: What you deploy, what you configure elsewhere, and how a request crosses the stack.
+---
+
+import Mermaid from '../../../components/Mermaid.astro';
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+You ship one process: your MCP server with mcp-authz inside it. Claude dials
+your public URL. WorkOS, Auth0, or Stytch runs login and mints tokens.
+TestRail, Jira, or whatever you wrapped keeps one service credential.
+
+<Mermaid
+  chart={`flowchart LR
+    Client["MCP client<br/>(Claude)"]
+    AS["Authorization server<br/>(WorkOS, Auth0, Stytch)"]
+    IdP["IdP<br/>(Google Workspace)"]
+    MCP["Your MCP server<br/>mcp-authz embedded"]
+    API["Downstream API<br/>(TestRail, Jira, …)"]
+
+    Client -->|"OAuth login, PKCE"| AS
+    AS --> IdP
+    Client -->|"POST /mcp<br/>Bearer token, aud = MCP URL"| MCP
+    MCP -->|"service credential"| API`}
+
+title="One process to deploy. An authorization server you already run or buy."
+/>
+
+## The boxes
+
+| Box                    | You deploy it?         | What it does                                                                     |
+| ---------------------- | ---------------------- | -------------------------------------------------------------------------------- |
+| MCP client             | No                     | Claude, or any connector that speaks OAuth 2.1 and Streamable HTTP               |
+| Authorization server   | Configure, usually buy | Client registration, consent, PKCE, token mint with `aud` = your MCP URL         |
+| IdP                    | Usually already there  | Google Workspace signs the human in; the AS passes `email`, `hd`, groups through |
+| MCP server + mcp-authz | **Yes**                | Verify token, run policy, expose only permitted capabilities, call handlers      |
+| Downstream API         | Usually already there  | One API key or service account; mcp-authz decides which person may use it        |
+
+`MCP_PUBLIC_URL` names the MCP server box. Every `OAUTH_*` value names the
+authorization server box. See [Configuration](/mcp-authz/guides/configuration/).
+
+## Same binary, different catalogues
+
+Each request calls `createServer` with the principal the policy produced. Dana
+holds `cases:read`, so `update_case` never registers for her request. Alice
+holds `cases:write`, so it does. The server binary does not change between them.
+
+The two seams reach that result differently. Capabilities you declare with
+`authz()` are skipped at registration. [`gate()`](/mcp-authz/typescript/gate/),
+over a server somebody else built, registers each one and immediately disables
+what the caller may not reach. What the caller sees is identical either way:
+absent from the listing, refused if named.
+
+<Mermaid
+  chart={`flowchart TD
+    ReqD["Dana's POST /mcp"] --> VerD["Verify token, run policy"]
+    VerD --> PrD["Principal: reader<br/>cases:read"]
+    PrD --> CatD["tools/list<br/>whoami, get_case"]
+    ReqA["Alice's POST /mcp"] --> VerA["Verify token, run policy"]
+    VerA --> PrA["Principal: editor<br/>cases:read, cases:write"]
+    PrA --> CatA["tools/list<br/>whoami, get_case, update_case"]`}
+/>
+
+Absence from `tools/list` is not the security boundary. Calling a name Dana was
+never shown is refused before dispatch, and that denied attempt reaches your
+`onDecision` sink. See
+[Capabilities](/mcp-authz/concepts/capabilities/).
+
+## OAuth: who does what
+
+<Mermaid
+  chart={`flowchart TD
+    Client["MCP client"] -->|"OAuth 2.1<br/>CIMD, PKCE, resource = MCP URL"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    IdP -->|"verified email, hd, groups"| AS
+    AS -->|"access token, aud = MCP URL"| Client
+    Client -->|"Bearer on POST /mcp"| Lib["mcp-authz"]
+    Lib -->|"createServer(principal)"| App["Your handlers"]`}
+/>
+
+mcp-authz is the resource server. It verifies tokens and maps identity to
+permissions. It does not run consent, client registration, or PKCE.
+
+Google Workspace alone cannot fill the authorization-server role: it has no
+client registration for your MCP audience, and it will not mint a token whose
+audience is your MCP endpoint. WorkOS, Stytch, and Auth0 cover both halves,
+Google login included.
+
+Configure the AS before you deploy. Step 2 in
+[Point your AS at it](/mcp-authz/guides/authorization-server/) registers your
+MCP URL as the resource identifier. Skip it and the client finishes OAuth, holds
+a valid token, and never sends it.
+
+## Permissions and scopes
+
+Policy grants permissions. The token carries OAuth scopes. They are separate on
+purpose.
+
+| Axis       | Who sets it                                        | A gap means                                        |
+| ---------- | -------------------------------------------------- | -------------------------------------------------- |
+| Permission | Administrator (policy, IdP groups, `authorize`)    | `403 policy_denied`. No re-login will help.        |
+| Scope      | User at consent (`toolScopes`, `capabilityScopes`) | `403 insufficient_scope`. Client can re-authorise. |
+
+The library checks permission before scope, so an unpermitted caller never gets
+a futile step-up prompt. Full detail in
+[Scopes and step-up](/mcp-authz/concepts/scopes/).
+
+## Variants on the same layout
+
+**Third-party MCP server.** Same deployment. Wrap the builder with
+[`gate()`](/mcp-authz/typescript/gate/) and map tool names to permissions.
+
+**Central entitlements.** Same deployment. Replace `policy` with
+[`authorize`](/mcp-authz/typescript/entitlements/) and call Cerbos, FGA, or your
+own store. mcp-authz stays the MCP enforcement point.
+
+**URL-only upstream (proxy).** A second process — or a Worker — runs
+[`createMcpProxy`](/mcp-authz/typescript/proxy/) in front of a vendor MCP you
+cannot wrap. Record the upstream catalogue, commit the permission map, and the
+proxy filters listings and refuses calls the principal may not reach.
+
+```mermaid
+flowchart LR
+    Client["MCP client"] --> Proxy["mcp-authz proxy"]
+  Proxy -->|"service bearer"| Upstream["Vendor MCP"]
+    Client -->|"OAuth"| AS["Authorization server"]
+```
+
+**Audit.** Downstream APIs see one service account. Your `onAudit` callback
+records which person triggered which action. See
+[Capabilities](/mcp-authz/concepts/capabilities/#audit).
+
+<Aside type="note" title="Request order inside the MCP server">
+  After the token arrives, the handler runs the [request ladder](/mcp-authz/concepts/request/): verify bearer,
+  evaluate policy, classify the body, check permission, check scope, then dispatch.
+</Aside>
+
+<CardGrid>
+  <LinkCard
+    title="Point your AS at it"
+    description="Five ordered steps at WorkOS, Auth0, or Stytch. Step 2 is the one people skip."
+    href="/mcp-authz/guides/authorization-server/"
+  />
+  <LinkCard
+    title="Configuration"
+    description="Environment variables for the MCP server box and where each value comes from."
+    href="/mcp-authz/guides/configuration/"
+  />
+</CardGrid>

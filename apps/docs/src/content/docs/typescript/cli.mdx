@@ -46,12 +46,39 @@ what-if, so it trusts the file it is handed rather than verifying a signature.
 npx mcp-authz check policy.json --capabilities caps.json
 ```
 
+`--capabilities` is the map naming every capability the server registers. Read it
+off the server with [`recordCapabilities`](/mcp-authz/typescript/permission-map/)
+rather than maintaining it by hand.
+
+```text
+npx mcp-authz check policy.json --capabilities caps.json
+```
+
 `check` runs the same reconciliation your server runs at boot, so a capability
 no role can reach fails the pull request rather than the deploy.
 
 It exits 1 on that and on an invalid policy, and 0 on an unused permission,
 which stays a warning because granting a role ahead of the tool that will use it
 is how a staged rollout works.
+
+## `record`
+
+Record the capabilities an MCP server exposes into a permission-map module:
+
+```bash
+# In-process factory (connector module exporting a server builder).
+npx mcp-authz record ./connector.ts --out permissions.ts
+
+# URL-only upstream (service credential).
+npx mcp-authz record \
+  --upstream https://vendor.example.com/mcp \
+  --token "$UPSTREAM_TOKEN" \
+  --out permissions.ts
+```
+
+`--check permissions.ts` compares the live catalogue and fingerprints to a
+committed file and exits 1 on drift — the usual CI guard before deploy or before
+standing up a [proxy](/mcp-authz/typescript/proxy/).
 
 ## In code
 

@@ -4,7 +4,8 @@ import { decodeMcpNameHeader } from './scopes';
 export type TrustedMcpRoute = {
   kind: 'modern';
   body: unknown;
-  outcome: Extract<InboundClassificationOutcome, { kind: 'modern' }>;
+  /** Absent on a route derived from the body alone; nothing downstream reads it. */
+  outcome?: Extract<InboundClassificationOutcome, { kind: 'modern' }>;
   method: string;
   name?: string;
 };
@@ -146,4 +147,25 @@ function requestId(body: unknown): string | number | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The route a JSON-RPC body names, ignoring headers entirely.
+ *
+ * For a request that carries no trustworthy 2026 routing headers there is
+ * nothing to cross-check, and the choice is between reading the body and
+ * refusing to say what the request does. A caller that has to price every
+ * capability it forwards needs the former: the body is the only claim the
+ * upstream will act on, so it is the claim to authorize against.
+ */
+export function routeFromBody(body: unknown): TrustedMcpRoute | undefined {
+  if (!isRecord(body)) return undefined;
+  const method = body.method;
+  if (typeof method !== 'string') return undefined;
+  const params = isRecord(body.params) ? body.params : undefined;
+  const source = Object.hasOwn(NAME_SOURCE, method)
+    ? NAME_SOURCE[method as keyof typeof NAME_SOURCE]
+    : undefined;
+  const name = source !== undefined && typeof params?.[source] === 'string' ? params[source] : undefined;
+  return { kind: 'modern', body, method, ...(name === undefined ? {} : { name }) };
 }

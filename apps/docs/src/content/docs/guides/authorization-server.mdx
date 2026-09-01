@@ -5,8 +5,9 @@ description: Five ordered steps at your authorization server. Step 2 is the one 
 
 import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Configuring the authorization server comes first, and one step of it decides
-whether any of this works.
+Configuring the authorization server comes first. It is the box to the left of
+your MCP server in [Deployment](/mcp-authz/concepts/deployment/). One step
+decides whether any of this works.
 
 <Aside type="danger" title="The failure mode to know about">
   Skip step 2 and the client finishes the whole OAuth dance, holds a valid token, and never sends it. Nothing

@@ -34,6 +34,33 @@ try {
     cwd: consumer,
     stdio: 'ignore',
   });
+
+  // `mcp-authz/testing` is the one subpath a production install cannot reach on
+  // its own: the client it needs is an optional peer, so npm skips it. Install
+  // it the way a consumer would and prove the export map still resolves.
+  execFileSync(
+    'npm',
+    ['install', '--ignore-scripts', '--no-audit', '--no-fund', '@modelcontextprotocol/client'],
+    { cwd: consumer, stdio: 'inherit' },
+  );
+  execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { recordCapabilities, toPermissionsModule } from 'mcp-authz/testing'; if (![recordCapabilities, toPermissionsModule].every(value => typeof value === 'function')) process.exit(1);",
+    ],
+    { cwd: consumer, stdio: 'inherit' },
+  );
+  execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { createMcpProxy } from 'mcp-authz/proxy'; if (typeof createMcpProxy !== 'function') process.exit(1);",
+    ],
+    { cwd: consumer, stdio: 'inherit' },
+  );
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

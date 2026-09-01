@@ -1,0 +1,31 @@
+{
+  "name": "mcp-authz-proxy-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example MCP proxy using mcp-authz/proxy in front of a URL-only upstream",
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx watch src/node.ts",
+    "start": "node dist/node.js",
+    "deploy": "wrangler deploy",
+    "lint": "eslint src",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "mcp-authz": "workspace:*",
+    "@modelcontextprotocol/node": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsdown": "^0.22.14",
+    "tsx": "^4.23.12",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "wrangler": "^4.42.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

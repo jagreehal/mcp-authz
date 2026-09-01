@@ -31,7 +31,7 @@ export function scopesForCapability(
   if (!name) return [baseline];
   const key =
     method === 'tools/call'
-      ? capabilityScopes[name] === undefined
+      ? configured(capabilityScopes, name) === undefined
         ? `tool:${name}`
         : name
       : method === 'prompts/get'
@@ -39,8 +39,27 @@ export function scopesForCapability(
         : method === 'resources/read'
           ? `resource:${name}`
           : undefined;
-  const required = (key ? capabilityScopes[key] : undefined) ?? baseline;
+  const required = (key === undefined ? undefined : configured(capabilityScopes, key)) ?? baseline;
   return typeof required === 'string' ? [required] : [...required];
+}
+
+/**
+ * What the map actually says about this capability, and nothing it inherited.
+ *
+ * A capability may be named anything the server likes, `__proto__` included,
+ * and a plain `map[name]` answers that one with `Object.prototype` — which is
+ * not `undefined`, so it reads as a configured scope, and then is not a string
+ * or a list either. Own properties only, and only values that are one of the
+ * two shapes a scope can take.
+ */
+function configured(
+  capabilityScopes: CapabilityScopeMap,
+  key: string,
+): string | readonly string[] | undefined {
+  if (!Object.hasOwn(capabilityScopes, key)) return undefined;
+  const value = capabilityScopes[key];
+  if (typeof value === 'string' || Array.isArray(value)) return value;
+  return undefined;
 }
 
 /** Decode SEP-2243's optional Base64 sentinel without accepting non-canonical input. */

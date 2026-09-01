@@ -26,6 +26,14 @@
     "./policy": {
       "types": "./dist/policy.d.ts",
       "import": "./dist/policy.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./proxy": {
+      "types": "./dist/proxy.d.ts",
+      "import": "./dist/proxy.js"
     }
   },
   "files": [
@@ -56,22 +64,28 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
+    "awaitly": "4.5.0",
     "jose": "^6.2.10"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/node": {
       "optional": true
+    },
+    "@modelcontextprotocol/client": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@types/node": "^26.2.0",
-    "executable-stories-vitest": "8.7.0",
-    "tsdown": "^0.22.14",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "executable-stories-vitest": "8.8.0",
+    "tsdown": "^0.22.14",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"

@@ -15,3 +15,8 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+
+# executable-stories writes one report per test file here. It is the state
+# a filtered run reads so it does not shrink the docs, but every entry carries
+# a runId and durations, so committing it would dirty the tree on every run.
+**/docs/by-file/

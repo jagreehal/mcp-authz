@@ -34,7 +34,7 @@ flowchart TD
     Q["How much of the server can you reach?"]
     Q -->|"You write the tools"| A["<b>authz()</b><br/>permissions declared on the capability,<br/>names checked by tsc,<br/>catalogue reconciled at boot"]
     Q -->|"You call somebody else's<br/>builder, and it lets you<br/>wrap the server it makes"| B["<b>gate()</b><br/>a permission map over tools<br/>that were never written for one"]
-    Q -->|"All you have is a URL"| C["A gateway<br/>no in-process seam exists to use"]
+    Q -->|"All you have is a URL"| C["<b>createMcpProxy</b><br/>record the catalogue,<br/>enforce at the edge"]
 ```
 
 The middle rung is the one people miss. A package you install, whose tools you
@@ -65,20 +65,39 @@ A predicate carries no vocabulary. TypeScript cannot derive the permission names
 
 Twenty tools sharing a vocabulary is where this pays. One tool with one rule is where it does not.
 
+## Deployment
+
+You ship one MCP server process with this library inside it. Claude dials your
+public URL. Your authorization server runs login. TestRail or Jira keeps one
+service credential. Full stack detail is in the
+[docs](https://jagreehal.github.io/mcp-authz/concepts/deployment/).
+
+```mermaid
+flowchart LR
+    Client["MCP client"] -->|"OAuth login, PKCE"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    Client -->|"Bearer token<br/>aud = your MCP URL"| MCP["Your MCP server<br/>mcp-authz"]
+    MCP -->|"service credential"| API["Downstream API"]
+```
+
 ## Who does what
 
-```
-Claude ──OAuth 2.1 (CIMD/DCR, PKCE, resource=your URL)──▶ authorization server
-                                                           │ signs the human in
-                                                           ▼
-                                                    Google Workspace (OIDC)
-                                                           │ verified email
-                                                           ▼
-                                                  this library: verify, map,
-                                                  call createServer(context)
+```mermaid
+flowchart TD
+    Client["MCP client"] -->|"OAuth 2.1, PKCE, resource = MCP URL"| AS["Authorization server"]
+    AS -->|"OIDC login"| IdP["Google Workspace"]
+    IdP -->|"verified email, hd, groups"| AS
+    AS -->|"access token, aud = MCP URL"| Client
+    Client -->|"Bearer on POST /mcp"| Lib["mcp-authz"]
+    Lib -->|"createServer(principal)"| App["Your handlers"]
 ```
 
-**We are a resource server, and nothing more.** Verifying tokens is ours. Registering Claude, showing consent and running PKCE belongs to an authorization server that already exists. Google cannot fill that role itself: it has no client registration for your MCP audience, and it will not mint a token whose audience is your MCP endpoint. WorkOS, Stytch and Auth0 all do both halves, including Google Workspace login.
+**We are a resource server, and nothing more.** Verifying tokens is ours.
+Registering Claude, showing consent and running PKCE belongs to an authorization
+server that already exists. Google cannot fill that role itself: it has no
+client registration for your MCP audience, and it will not mint a token whose
+audience is your MCP endpoint. WorkOS, Stytch and Auth0 all do both halves,
+including Google Workspace login.
 
 ## What a request goes through
 
@@ -203,6 +222,13 @@ Returns `(request: Request) => Promise<Response>`.
 | `permissions`       | Optional: the boot-time map, when a factory of yours hides it  |
 | `maxRequestBytes`   | Cap on the post-auth body read that names a capability. 1 MiB  |
 | `legacy`            | 2025 handling; strict `reject` by default                      |
+
+**`legacy` needs care.** The SDK client 2.0.0 still opens with an `initialize` handshake, and
+2026-07-28 removed it (SEP-2567) — so from this handler's side every client shipping today is a
+legacy client, and the default `reject` turns all of them away. A deployment real clients must
+reach wants `legacy: 'stateless'` until a client ships without the handshake. The refusal says
+so itself rather than returning a bare protocol error. The gate applies identically on both
+paths; `src/e2e.story.test.ts` drives a real client through each.
 
 `MCP_PUBLIC_URL` / `resourceServerUrl` **must** be the URL clients actually reach. Advertise anything else and a conforming client will not attach its token to a resource it was not issued for.
 
@@ -464,6 +490,78 @@ no error to read.
 This needs the hook because the SDK keeps a built server's tool list private, so
 nothing can filter what it never saw. Pass the same map as `permissions` to
 `createMcpFetch` and the boot-time check still covers the roles side.
+
+### `recordCapabilities(factory)` — building that map
+
+The map above has to name every capability the server registers, and nothing
+produced it: you wrote it by hand and it drifted quietly. `mcp-authz/testing`
+reads it off the server instead.
+
+```ts
+import { recordCapabilities, toPermissionsModule } from 'mcp-authz/testing';
+
+const { names, fingerprints } = await recordCapabilities(() => buildServer(TEST_CONFIG));
+
+expect(names).toEqual(Object.keys(PERMISSIONS).sort());
+expect(fingerprints).toMatchSnapshot();
+```
+
+It builds your server, connects a client over an in-memory transport, and lists
+tools, prompts, resources and templates, labelled the way `gate()` labels them.
+Build it **ungated**: a gated server answers per principal, so listing one hands
+you a map missing exactly the capabilities that most need a price.
+
+`toPermissionsModule(record)` renders the starting map as TypeScript source —
+`as const` with the derived permission type — every capability priced
+`TODO:unassigned`, which no role grants, so reconciliation refuses the boot until
+a person has decided what each one costs. Permissions are never guessed from
+`readOnlyHint`: the specification says annotations are hints and that tool-use
+decisions must not be made from them.
+
+`gate()` already refuses to start on a capability with no price, which covers a
+dependency that adds a tool. `fingerprints` covers the one it cannot see — a
+capability that keeps its name while its description, input schema, prompt
+arguments or URI template change underneath. Each digests the whole definition
+as served, so a snapshot turns that into a diff on the pull request. Nothing is
+enforced at boot: a digest in production is a second source of truth, and would
+make a description edit an outage.
+
+`@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
+
+### `createMcpProxy` — URL-only upstream
+
+When there is no builder hook, `mcp-authz/proxy` sits in front of a vendor MCP
+reached only by URL:
+
+```ts
+import { createMcpProxy } from 'mcp-authz/proxy';
+
+export default createMcpProxy({
+  resourceServerUrl: new URL(process.env.MCP_PUBLIC_URL!),
+  oauthMetadata: {/* same as createMcpFetch */},
+  verifier: { jwksUri: process.env.OAUTH_JWKS_URI! },
+  policy,
+  permissions: PERMISSIONS, // from recordUpstream → toPermissionsModule
+  resourceUris: RESOURCE_URIS, // same module; a read names a URI, not a label
+  upstream: {
+    url: process.env.UPSTREAM_URL!,
+    bearer: process.env.UPSTREAM_TOKEN!,
+  },
+});
+```
+
+Record the upstream with `recordUpstream` or `mcp-authz record --upstream`, price
+the map, deploy the proxy.
+
+The proxy is stricter than embed mode, because nothing downstream of it re-checks
+anything and it forwards on a service credential that outranks the caller.
+Routing headers that disagree with the body are refused rather than forwarded; a
+request with no routing headers is authorized from the body, which is what the
+upstream will act on; and a capability the map does not price is refused outright.
+The caller's `Authorization` and `Cookie` stay at the edge.
+
+See [proxy mode](https://jagreehal.github.io/mcp-authz/typescript/proxy/) and the
+[`proxy-example`](../../apps/proxy-example) app.
 
 ### Boot-time reconciliation
 

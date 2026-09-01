@@ -4,3 +4,4 @@ coverage
 .turbo
 .astro
 node_modules
+**/docs/by-file
