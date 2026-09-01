@@ -73,4 +73,18 @@ describe('recordCapabilities', () => {
     expect(after.fingerprints.get_case).not.toBe(before.fingerprints.get_case);
     expect(after.fingerprints.update_case).toBe(before.fingerprints.update_case);
   });
+
+  it('records a server that declares only tools, without asking it for the rest', async () => {
+    // Most servers are not the fixture above. A tools-only server never declares
+    // prompts or resources, and asking it for them is a protocol error.
+    const toolsOnly = () => {
+      const server = new McpServer({ name: 'tools-only', version: '1.0.0' }, { capabilities: { tools: {} } });
+      server.registerTool('whoami', { description: 'Who am I' }, async () => ({ content: [] }));
+      return server;
+    };
+
+    const { names } = await recordCapabilities(toolsOnly);
+
+    expect(names).toEqual(['whoami']);
+  });
 });
