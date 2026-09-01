@@ -56,11 +56,16 @@ export async function recordCapabilities(
   await client.connect(clientTransport);
 
   try {
+    // Ask only for what the server said it has. The SDK answers an unadvertised
+    // list with a warning and an empty result, and that warning is written to
+    // stdout — which is the generated module when the caller redirects it.
+    const advertised = client.getServerCapabilities() ?? {};
+    const none = { tools: [], prompts: [], resources: [], resourceTemplates: [] };
     const [tools, prompts, resources, templates] = await Promise.all([
-      client.listTools(),
-      client.listPrompts(),
-      client.listResources(),
-      client.listResourceTemplates(),
+      advertised.tools ? client.listTools() : none,
+      advertised.prompts ? client.listPrompts() : none,
+      advertised.resources ? client.listResources() : none,
+      advertised.resources ? client.listResourceTemplates() : none,
     ]);
     const labelled: [string, unknown][] = [
       ...tools.tools.map((tool) => [tool.name, tool] as [string, unknown]),

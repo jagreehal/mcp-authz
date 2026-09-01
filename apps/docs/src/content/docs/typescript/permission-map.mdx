@@ -88,6 +88,30 @@ an artefact you regenerate.
   server being priced decide its own access level.
 </Aside>
 
+## Running it in CI
+
+There is nothing to wire. Both assertions live in your test suite, so the job you
+already run is the gate:
+
+```yaml
+- run: pnpm test
+```
+
+A capability added upstream fails the first assertion, naming it. A capability
+that changed underneath fails the snapshot, and the diff shows which field moved
+— so the pull request that bumps the dependency is the one that stops, rather
+than the deploy that follows it.
+
+Accepting a change is deliberate:
+
+```bash
+pnpm vitest -u    # re-record, then review the snapshot diff like any other change
+```
+
+That review is the point. A snapshot updated without reading it is the same as no
+snapshot, so treat a fingerprint diff the way you would treat a change to the
+permission map itself.
+
 ## What the fingerprints catch
 
 `gate()` refuses to boot on a capability it has no price for, which covers a

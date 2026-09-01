@@ -47,3 +47,16 @@ truth that turns a description edit into an outage. The snapshot is the gate, an
 your lockfile pins what runs.
 
 `@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
+
+A CLI command for connector maintainers who would rather not write the test
+scaffolding by hand:
+
+```bash
+npx mcp-authz record ./connector.ts --out src/permissions.ts
+```
+
+It imports the module, calls its default export to build the server, and writes
+the same map. `mcp-authz/testing` is loaded lazily, so the other commands keep
+the CLI's no-dependency property and only `record` asks you to install the
+client.
+

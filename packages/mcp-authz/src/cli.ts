@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { definePolicy, reconcile, type Identity, type MatchedRule, type PolicySpec } from './policy';
 
@@ -19,6 +21,7 @@ import { definePolicy, reconcile, type Identity, type MatchedRule, type PolicySp
 const USAGE = `mcp-authz — inspect a policy without running a server
 
   mcp-authz check <policy.json> [--capabilities <map.json>]
+  mcp-authz record <connector.ts> [--out <permissions.ts>]
   mcp-authz explain <policy.json> --identity <identity.json>|- [--capabilities <map.json>]
 
 Files
@@ -32,13 +35,14 @@ Exit codes
   1  the policy is invalid, or a capability no role can reach
 `;
 
-export function main(argv: readonly string[]): number {
+export function main(argv: readonly string[]): number | Promise<number> {
   const { values, positionals } = parseArgs({
     args: [...argv],
     allowPositionals: true,
     options: {
       capabilities: { type: 'string' },
       identity: { type: 'string' },
+      out: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -47,6 +51,15 @@ export function main(argv: readonly string[]): number {
   if (values.help || !command) {
     process.stdout.write(USAGE);
     return values.help ? 0 : 1;
+  }
+  // `record` takes a module rather than a policy, so it branches before the
+  // policy file is read.
+  if (command === 'record') {
+    if (!policyPath) {
+      process.stderr.write('record needs a path to a module whose default export builds the server.\n');
+      return 1;
+    }
+    return record(policyPath, values.out);
   }
   if (!policyPath) {
     process.stderr.write(`${command} needs a path to a policy file.\n`);
@@ -69,6 +82,40 @@ export function main(argv: readonly string[]): number {
 
   process.stderr.write(`Unknown command '${command}'.\n\n${USAGE}`);
   return 1;
+}
+
+/**
+ * Read the capabilities off a connector and write the map to start from.
+ *
+ * `mcp-authz/testing` is imported lazily, and the client it needs is an optional
+ * peer, so the other commands keep the CLI's no-dependency property and only
+ * somebody running `record` is asked to install anything.
+ */
+async function record(modulePath: string, out: string | undefined): Promise<number> {
+  let toolkit: typeof import('./testing');
+  try {
+    toolkit = await import('./testing');
+  } catch {
+    process.stderr.write(
+      'record needs @modelcontextprotocol/client, which is an optional peer.\n' +
+        '  npm install -D @modelcontextprotocol/client\n',
+    );
+    return 1;
+  }
+
+  const loaded = (await import(pathToFileURL(resolve(modulePath)).href)) as {
+    default?: () => unknown;
+  };
+  if (typeof loaded.default !== 'function') {
+    process.stderr.write(`${modulePath} must default-export a function that builds the server.\n`);
+    return 1;
+  }
+
+  const capabilities = await toolkit.recordCapabilities(loaded.default as never);
+  const source = toolkit.toPermissionsModule(capabilities);
+  if (out) writeFileSync(out, source);
+  else process.stdout.write(source);
+  return 0;
 }
 
 function check(
@@ -180,7 +227,7 @@ function readJson(path: string): unknown {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    process.exitCode = main(process.argv.slice(2));
+    process.exitCode = await main(process.argv.slice(2));
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

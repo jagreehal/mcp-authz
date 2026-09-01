@@ -1,4 +1,5 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -111,5 +112,30 @@ describe('explain', () => {
     expect(main(['explain', POLICY, '--identity', departed])).toBe(0);
     expect(out).toContain('Rule 2 denies');
     expect(out).toMatch(/Permissions\n {2}none/);
+  });
+});
+
+describe('record', () => {
+  it('writes a permission map naming what the connector registers', async () => {
+    const out = join(dir, 'permissions.ts');
+
+    const code = await main(['record', 'src/__fixtures__/connector.ts', '--out', out]);
+
+    expect(code).toBe(0);
+    const generated = (await import(pathToFileURL(out).href)) as { PERMISSIONS: Record<string, string> };
+    expect(generated.PERMISSIONS).toEqual({
+      get_case: 'TODO:unassigned',
+      'prompt:triage': 'TODO:unassigned',
+      update_case: 'TODO:unassigned',
+    });
+  });
+
+  it('prints only the module, so `record > permissions.ts` is a valid file', async () => {
+    expect(await main(['record', 'src/__fixtures__/connector.ts'])).toBe(0);
+
+    // The fixture advertises no resources. Anything the SDK says about that lands
+    // in the redirected file and makes it fail to parse.
+    expect(out).not.toContain('does not advertise');
+    expect(out.trimStart().startsWith('//')).toBe(true);
   });
 });
