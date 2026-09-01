@@ -463,11 +463,39 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       throw error;
     }
 
-    return mcp.fetch(request, {
+    const answer = await mcp.fetch(request, {
       authInfo: { ...auth, extra: { ...auth.extra, [contextExtraKey]: context } },
       ...(preflight ? { parsedBody: preflight.body } : {}),
     });
+    return legacy === 'reject' ? explainLegacyRefusal(answer) : answer;
   };
+}
+
+/**
+ * Say what to do about the refusal every new deployment meets first.
+ *
+ * `legacy: 'reject'` is strict on purpose, but no MCP client shipping today can
+ * satisfy it: they all still open with the `initialize` handshake that 2026-07-28
+ * removed. So the first connection anybody makes fails with a bare protocol
+ * error that does not mention that a setting exists, let alone which one. The
+ * refusal stands; it just stops being a riddle.
+ */
+async function explainLegacyRefusal(response: Response): Promise<Response> {
+  if (response.ok) return response;
+  const body = await response.clone().text();
+  if (!body.includes('Unsupported protocol version')) return response;
+
+  let payload: { error?: { message?: string } };
+  try {
+    payload = JSON.parse(body) as { error?: { message?: string } };
+  } catch {
+    return response;
+  }
+  if (typeof payload.error?.message !== 'string') return response;
+
+  payload.error.message +=
+    ". No MCP client currently ships without the initialize handshake, so this refuses every client available today. Set legacy: 'stateless' to serve them.";
+  return Response.json(payload, { status: response.status, headers: response.headers });
 }
 
 function routeFromScopeKey(key: string): { kind: 'tool' | 'prompt' | 'resource'; name: string } {

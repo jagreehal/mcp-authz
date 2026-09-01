@@ -435,6 +435,13 @@ describe('A client from before this protocol version', () => {
     story.then("it is turned away, because `legacy: 'reject'` is the default");
     await expect(connect(gatedHandler({ legacy: 'reject' }), bearer)).rejects.toThrow();
 
+    story.and('the refusal names the setting that would serve it');
+    story.note(
+      'This is the first thing anybody wiring up the library sees go wrong, and the ' +
+        'protocol error alone does not say that a setting exists, let alone which one.',
+    );
+    expect(refusal).toContain("legacy: 'stateless'");
+
     story.and("the same client is served once the deployment sets `legacy: 'stateless'`");
     const relaxed = await connect(gatedHandler(), bearer);
     expect(names((await relaxed.listTools()).tools)).toEqual(['get_case', 'search_cases']);

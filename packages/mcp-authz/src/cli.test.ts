@@ -211,4 +211,20 @@ describe('record', () => {
     // get_case is priced, but is not the tool that was recorded.
     expect(out).toContain('get_case');
   });
+
+  it('says so when the committed map carries no baseline to compare against', async () => {
+    // A map written before FINGERPRINTS existed, or by hand. Names can still be
+    // compared; definitions cannot, and a silent partial check in CI is worse
+    // than no check, because it reads as a pass.
+    const map = join(dir, 'baseline-less.ts');
+    writeFileSync(
+      map,
+      "export const PERMISSIONS = { get_case: 'cases:read', update_case: 'cases:write', 'prompt:triage': 'cases:read' } as const;\n",
+    );
+
+    const code = await main(['record', 'src/__fixtures__/connector.ts', '--check', map]);
+
+    expect(code).toBe(0);
+    expect(out).toContain('no FINGERPRINTS');
+  });
 });

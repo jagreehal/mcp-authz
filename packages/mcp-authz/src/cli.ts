@@ -183,8 +183,15 @@ async function drift(
     (name) => priced.includes(name) && recorded[name] && recorded[name] !== live.fingerprints[name],
   );
 
+  // A map with no baseline can still be checked for names, but not for a
+  // capability that changed under one. Silence there reads as a pass.
+  const unbaselined =
+    Object.keys(recorded).length === 0
+      ? ` — ${path} carries no FINGERPRINTS, so definitions were not compared; re-record to add one`
+      : '';
+
   if (added.length === 0 && removed.length === 0 && changed.length === 0) {
-    process.stdout.write(`${live.names.length} capabilities, unchanged since ${path}\n`);
+    process.stdout.write(`${live.names.length} capabilities, names unchanged since ${path}${unbaselined}\n`);
     return 0;
   }
 
@@ -195,6 +202,7 @@ async function drift(
     lines.push(`  - ${name}`, '      priced here, but the server no longer offers it');
   for (const name of changed)
     lines.push(`  ~ ${name}`, '      same name, different definition than the one recorded');
+  if (unbaselined) lines.push('', `Note:${unbaselined.slice(3)}`);
   lines.push('', 'Re-record when the change is expected, and review the diff.', '');
   process.stdout.write(lines.join('\n'));
   return 1;

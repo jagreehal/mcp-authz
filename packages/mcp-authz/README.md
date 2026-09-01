@@ -226,8 +226,9 @@ Returns `(request: Request) => Promise<Response>`.
 **`legacy` needs care.** The SDK client 2.0.0 still opens with an `initialize` handshake, and
 2026-07-28 removed it (SEP-2567) — so from this handler's side every client shipping today is a
 legacy client, and the default `reject` turns all of them away. A deployment real clients must
-reach wants `legacy: 'stateless'` until a client ships without the handshake. The gate applies
-identically on both paths; `src/e2e.story.test.ts` drives a real client through each.
+reach wants `legacy: 'stateless'` until a client ships without the handshake. The refusal says
+so itself rather than returning a bare protocol error. The gate applies identically on both
+paths; `src/e2e.story.test.ts` drives a real client through each.
 
 `MCP_PUBLIC_URL` / `resourceServerUrl` **must** be the URL clients actually reach. Advertise anything else and a conforming client will not attach its token to a resource it was not issued for.
 
