@@ -23,11 +23,13 @@ const USAGE = `mcp-authz — inspect a policy without running a server
   mcp-authz check <policy.json> [--capabilities <map.json>]
   mcp-authz record <connector.ts> [--out <permissions.ts>]
   mcp-authz record --upstream <url> [--token <bearer>] [--out <permissions.ts>]
+  mcp-authz record <connector.ts|--upstream <url>> --check <permissions.ts>
   mcp-authz explain <policy.json> --identity <identity.json>|- [--capabilities <map.json>]
 
 Files
   <policy.json>     the object you would hand definePolicy
-  --capabilities    { "get_case": "cases:read", "prompt:triage": "cases:write" }
+  --capabilities    a .json map, or a .ts/.js module exporting PERMISSIONS,
+                    which is what record writes
   --identity        an Identity, or a decoded token payload (iss, sub, email,
                     email_verified, hd). Use - to read it from stdin.
 
@@ -46,6 +48,7 @@ export function main(argv: readonly string[]): number | Promise<number> {
       out: { type: 'string' },
       upstream: { type: 'string' },
       token: { type: 'string' },
+      check: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -58,14 +61,16 @@ export function main(argv: readonly string[]): number | Promise<number> {
   // `record` takes a module rather than a policy, so it branches before the
   // policy file is read.
   if (command === 'record') {
-    if (values.upstream) return record({ upstream: values.upstream, token: values.token }, values.out);
+    if (values.upstream) {
+      return record({ upstream: values.upstream, token: values.token }, values.out, values.check);
+    }
     if (!policyPath) {
       process.stderr.write(
         'record needs a module whose default export builds the server, or --upstream <url>.\n',
       );
       return 1;
     }
-    return record({ module: policyPath }, values.out);
+    return record({ module: policyPath }, values.out, values.check);
   }
   if (!policyPath) {
     process.stderr.write(`${command} needs a path to a policy file.\n`);
@@ -73,21 +78,38 @@ export function main(argv: readonly string[]): number | Promise<number> {
   }
 
   const policy = definePolicy(readJson(policyPath) as PolicySpec);
-  const capabilities = values.capabilities
-    ? new Map(Object.entries(readJson(values.capabilities) as Record<string, string>))
-    : undefined;
 
-  if (command === 'check') return check(policy, capabilities);
-  if (command === 'explain') {
-    if (!values.identity) {
-      process.stderr.write('explain needs --identity <file>, or - for stdin.\n');
-      return 1;
+  const run = (capabilities: ReadonlyMap<string, string> | undefined): number => {
+    if (command === 'check') return check(policy, capabilities);
+    if (command === 'explain') {
+      if (!values.identity) {
+        process.stderr.write('explain needs --identity <file>, or - for stdin.\n');
+        return 1;
+      }
+      return explain(policy, identityFrom(readJson(values.identity)), capabilities);
     }
-    return explain(policy, identityFrom(readJson(values.identity)), capabilities);
-  }
+    process.stderr.write(`Unknown command '${command}'.\n\n${USAGE}`);
+    return 1;
+  };
 
-  process.stderr.write(`Unknown command '${command}'.\n\n${USAGE}`);
-  return 1;
+  if (!values.capabilities) return run(undefined);
+  // `record` writes a module, so reading only JSON here left the documented loop
+  // open: you could generate a map and then not check it. A .json path stays
+  // synchronous, which is what every other command is.
+  if (values.capabilities.endsWith('.json')) {
+    return run(new Map(Object.entries(readJson(values.capabilities) as Record<string, string>)));
+  }
+  return importCapabilities(values.capabilities).then(run);
+}
+
+/** Read the map out of a module `record` produced, or one written by hand. */
+async function importCapabilities(path: string): Promise<ReadonlyMap<string, string>> {
+  const loaded = (await import(pathToFileURL(resolve(path)).href)) as Record<string, unknown>;
+  const map = (loaded.PERMISSIONS ?? loaded.default) as Record<string, string> | undefined;
+  if (!map || typeof map !== 'object') {
+    throw new Error(`${path} must export PERMISSIONS, or default, mapping each capability to a permission.`);
+  }
+  return new Map(Object.entries(map));
 }
 
 /**
@@ -99,7 +121,11 @@ export function main(argv: readonly string[]): number | Promise<number> {
  */
 type RecordSource = { module: string } | { upstream: string; token?: string };
 
-async function record(source: RecordSource, out: string | undefined): Promise<number> {
+async function record(
+  source: RecordSource,
+  out: string | undefined,
+  against: string | undefined,
+): Promise<number> {
   let toolkit: typeof import('./testing');
   try {
     toolkit = await import('./testing');
@@ -126,10 +152,52 @@ async function record(source: RecordSource, out: string | undefined): Promise<nu
     }
     capabilities = await toolkit.recordCapabilities(loaded.default as never);
   }
+  if (against) return drift(capabilities, against);
+
   const generated = toolkit.toPermissionsModule(capabilities);
   if (out) writeFileSync(out, generated);
   else process.stdout.write(generated);
   return 0;
+}
+
+/**
+ * Compare what the server has now against the map somebody committed.
+ *
+ * The snapshot story needs a test runner, and the upstream path has none — this
+ * is what lets a URL-only server be watched from CI at all.
+ */
+async function drift(
+  live: { names: string[]; fingerprints: Record<string, string> },
+  path: string,
+): Promise<number> {
+  const loaded = (await import(pathToFileURL(resolve(path)).href)) as {
+    PERMISSIONS?: Record<string, string>;
+    FINGERPRINTS?: Record<string, string>;
+  };
+  const priced = Object.keys(loaded.PERMISSIONS ?? {});
+  const recorded = loaded.FINGERPRINTS ?? {};
+
+  const added = live.names.filter((name) => !priced.includes(name));
+  const removed = priced.filter((name) => !live.names.includes(name));
+  const changed = live.names.filter(
+    (name) => priced.includes(name) && recorded[name] && recorded[name] !== live.fingerprints[name],
+  );
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+    process.stdout.write(`${live.names.length} capabilities, unchanged since ${path}\n`);
+    return 0;
+  }
+
+  const lines = ['The server no longer matches the recorded capabilities:', ''];
+  for (const name of added)
+    lines.push(`  + ${name}`, '      never priced, so nobody decided who may reach it');
+  for (const name of removed)
+    lines.push(`  - ${name}`, '      priced here, but the server no longer offers it');
+  for (const name of changed)
+    lines.push(`  ~ ${name}`, '      same name, different definition than the one recorded');
+  lines.push('', 'Re-record when the change is expected, and review the diff.', '');
+  process.stdout.write(lines.join('\n'));
+  return 1;
 }
 
 function check(

@@ -183,4 +183,14 @@ describe('recordCapabilities', () => {
       'update_case',
     ]);
   });
+
+  it('emits the fingerprints beside the map, as a separate export', async () => {
+    const record = await recordCapabilities(serverWithEveryKind);
+
+    const generated = await importGenerated(toPermissionsModule(record));
+
+    // A separate export, not nested inside PERMISSIONS: gate() takes a flat map,
+    // and CI needs a baseline it can compare without a test runner.
+    expect(generated.FINGERPRINTS).toEqual(record.fingerprints);
+  });
 });

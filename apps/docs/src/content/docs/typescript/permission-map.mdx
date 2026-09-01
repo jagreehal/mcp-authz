@@ -112,6 +112,33 @@ That review is the point. A snapshot updated without reading it is the same as n
 snapshot, so treat a fingerprint diff the way you would treat a change to the
 permission map itself.
 
+### A server you only have a URL for
+
+The recipe above assumes a test suite, which a server you did not write is not
+part of. Record it, and check it from CI directly:
+
+```bash
+npx mcp-authz record --upstream https://vendor.example/mcp --token $TOKEN --out src/permissions.ts
+npx mcp-authz record --upstream https://vendor.example/mcp --token $TOKEN --check src/permissions.ts
+```
+
+The generated module carries a `FINGERPRINTS` export beside `PERMISSIONS` — a
+separate export, because `gate()` takes the flat map and CI needs a baseline it
+can compare with no test runner involved. The check exits non-zero and says what
+moved:
+
+```text
+The server no longer matches the recorded capabilities:
+
+  + update_case
+      never priced, so nobody decided who may reach it
+  ~ get_case
+      same name, different definition than the one recorded
+```
+
+Reading an upstream is not enforcing it. This tells you a vendor changed their
+capability surface; what to do about it is still yours to decide.
+
 ## What the fingerprints catch
 
 `gate()` refuses to boot on a capability it has no price for, which covers a

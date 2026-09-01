@@ -177,4 +177,38 @@ describe('record', () => {
       await new Promise<void>((closed) => http.close(() => closed()));
     }
   });
+
+  it('checks a policy against the TypeScript map that record wrote', async () => {
+    // record emits a module; check took JSON only, so the documented loop —
+    // record, price the TODOs, check against the policy — could not close.
+    const map = join(dir, 'priced-permissions.ts');
+    writeFileSync(
+      map,
+      "export const PERMISSIONS = { get_case: 'cases:read', update_case: 'cases:write' } as const;\n",
+    );
+
+    const code = await main(['check', POLICY, '--capabilities', map]);
+
+    expect(code).toBe(0);
+    expect(out).toContain('2 permissions');
+  });
+
+  it('fails CI when the live capabilities no longer match the committed map', async () => {
+    const map = join(dir, 'stale-permissions.ts');
+    writeFileSync(
+      map,
+      [
+        "export const PERMISSIONS = { get_case: 'cases:read', 'prompt:triage': 'cases:read' } as const;",
+        "export const FINGERPRINTS = { get_case: 'stale', 'prompt:triage': 'stale' } as const;",
+      ].join('\n'),
+    );
+
+    const code = await main(['record', 'src/__fixtures__/connector.ts', '--check', map]);
+
+    expect(code).toBe(1);
+    // update_case exists on the server and was never priced.
+    expect(out).toContain('update_case');
+    // get_case is priced, but is not the tool that was recorded.
+    expect(out).toContain('get_case');
+  });
 });

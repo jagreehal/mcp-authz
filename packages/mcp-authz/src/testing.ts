@@ -146,6 +146,12 @@ export function toPermissionsModule(record: CapabilityRecord): string {
     '',
     'export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];',
     '',
+    '// What each capability looked like when this was recorded. A separate export',
+    '// because gate() takes the flat map above; this is the baseline CI compares.',
+    'export const FINGERPRINTS = {',
+    ...record.names.map((label) => `  ${quote(label)}: '${record.fingerprints[label]}',`),
+    '} as const;',
+    '',
   ].join('\n');
 }
 
