@@ -114,6 +114,18 @@ a futile step-up prompt. Full detail in
 [`authorize`](/mcp-authz/typescript/entitlements/) and call Cerbos, FGA, or your
 own store. mcp-authz stays the MCP enforcement point.
 
+**URL-only upstream (proxy).** A second process — or a Worker — runs
+[`createMcpProxy`](/mcp-authz/typescript/proxy/) in front of a vendor MCP you
+cannot wrap. Record the upstream catalogue, commit the permission map, and the
+proxy filters listings and refuses calls the principal may not reach.
+
+```mermaid
+flowchart LR
+    Client["MCP client"] --> Proxy["mcp-authz proxy"]
+  Proxy -->|"service bearer"| Upstream["Vendor MCP"]
+    Client -->|"OAuth"| AS["Authorization server"]
+```
+
 **Audit.** Downstream APIs see one service account. Your `onAudit` callback
 records which person triggered which action. See
 [Capabilities](/mcp-authz/concepts/capabilities/#audit).

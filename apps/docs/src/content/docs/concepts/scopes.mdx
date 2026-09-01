@@ -18,7 +18,12 @@ toolScopes: {
 ```
 
 Use `capabilityScopes` when prompts or resources need step-up too. Keys are a
-bare tool name (or `tool:name`), `prompt:name`, and `resource:<uri>`.
+bare tool name (or `tool:name`), `prompt:name`, and `resource:<uri>` — the URI
+**as you registered it**, so a templated resource keeps its placeholders:
+`resource:cases://case/{id}`. A read of `cases://case/C1` is matched back to that
+template before its scope is looked up. In [proxy
+mode](/mcp-authz/typescript/proxy/) the key is the label instead, because that is
+what the permission map is keyed by there.
 
 ## What each axis controls
 

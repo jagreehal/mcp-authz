@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'gate(): servers you did not write', slug: 'typescript/gate' },
             { label: 'External entitlements', slug: 'typescript/entitlements' },
             { label: 'Building the permission map', slug: 'typescript/permission-map' },
+            { label: 'Proxy mode', slug: 'typescript/proxy' },
             { label: 'CLI', slug: 'typescript/cli' },
           ],
         },

@@ -30,6 +30,22 @@ import type { PermissionCatalog, Policy, Principal } from './policy';
 export type Capability = 'tool' | 'prompt' | 'resource';
 
 /** What actually happened, for the audit log the downstream API cannot write. */
+/**
+ * What happened, and who it was.
+ *
+ * `issuer` and `sub` are required because every path that reaches here is
+ * downstream of a verified bearer token — they come from a `Principal`, which
+ * cannot exist without one. That is what makes this an audit trail rather than
+ * a log of claims somebody sent.
+ *
+ * If a mode ever forwards traffic without verifying identity, **it must omit
+ * identity from its events rather than fill these in from decoded token
+ * claims.** Decoded claims are attacker-controlled, and putting them in a field
+ * named `sub` presents low-integrity data in a high-trust schema: the failure
+ * mode is that it reads exactly like evidence. Give that mode its own event
+ * type, tagged with whether the identity was verified, rather than widening
+ * this one.
+ */
 export type AuditEvent = {
   issuer: string;
   sub: string;
@@ -298,9 +314,10 @@ async function deliverTerminalAudit(
  * survive a restart — a process that dies mid-question takes the request with
  * it, and the action correctly did not happen.
  *
- * ponytail: blocking, in-memory, one process. Keep the deadline under the idle
- * timeout of whatever proxy sits in front, and reach for MCP progress
- * notifications (or a pending-ticket tool of your own) if you need longer.
+ * The ceiling is deliberate: blocking, in-memory, one process. Keep the
+ * deadline under the idle timeout of whatever proxy sits in front, and reach
+ * for MCP progress notifications (or a pending-ticket tool of your own) if you
+ * need longer.
  */
 async function decideWithin(
   ask: () => ApprovalDecision | Promise<ApprovalDecision>,
@@ -412,7 +429,10 @@ function resourcesFor<P extends string, C, H>(handlerContext: (context: C, princ
     return {
       label: `resource:${name}`,
       kind: 'resource',
-      ...(typeof uri === 'string' ? { routeName: uri } : {}),
+      // The URI as registered — a template keeps its `{placeholders}`. This is
+      // the key a scope map is written against, and the one a concrete request
+      // URI has to be resolved back to before a scope can be looked up.
+      routeName: typeof uri === 'string' ? uri : routeTemplate.toString(),
       routeMatches: (target) => routeTemplate.match(target) !== null,
       permission,
       approval: Boolean(approval),
@@ -467,6 +487,8 @@ type ServerFactory<C> = ((context: C) => McpServer) & {
   permissions: ReadonlyMap<string, string>;
   routePermissions: ReadonlyMap<string, string>;
   permissionForRoute: (kind: Capability, name: string) => string | undefined;
+  /** The registered route name a concrete request name resolves to, template included. */
+  routeNameFor: (kind: Capability, name: string) => string | undefined;
 };
 
 function buildServer<P extends string, C>(
@@ -529,6 +551,11 @@ function buildServer<P extends string, C>(
   return Object.assign(factory, {
     permissions: permissions as ReadonlyMap<string, string>,
     routePermissions: routePermissions as ReadonlyMap<string, string>,
+    routeNameFor: (kind: Capability, name: string) =>
+      definitions.find(
+        (definition) =>
+          definition.kind === kind && (definition.routeMatches?.(name) ?? definition.routeName === name),
+      )?.routeName,
     permissionForRoute: (kind: Capability, name: string) =>
       definitions.find(
         (definition) =>

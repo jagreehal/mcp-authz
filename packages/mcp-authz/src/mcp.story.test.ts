@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { story } from 'executable-stories-vitest';
 import { exportJWK, generateKeyPair, SignJWT, type JWK, type KeyObject } from 'jose';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -1520,5 +1520,123 @@ describe('Reading the body that names the capability', () => {
         'baseline rather than to what its headers asked for.',
     );
     expect(response.status).toBe(401);
+  });
+
+  it('survives a routed capability when the resolver mode has no principal', async ({ task }) => {
+    story.init(task, { tags: ['resolver'], covers: ['src/handler.ts', 'src/ladder.ts'] });
+    stubJwks();
+
+    story.given('a server whose capabilities carry route permissions');
+    const policy = definePolicy({
+      roles: { editor: ['cases:write'] },
+      rules: [{ role: 'editor' }],
+    });
+    const { tool, server } = authz(policy);
+    const createServer = server(
+      [
+        tool('update_case', { permission: 'cases:write' }, async () => ({
+          content: [{ type: 'text' as const, text: 'updated' }],
+        })),
+      ],
+      { name: 'test', version: '1.0.0' },
+    );
+
+    story.and('a gate wired in resolver mode, which decides access itself and has no principal');
+    const fetchHandler = createMcpFetch({
+      resourceServerUrl: RESOURCE,
+      oauthMetadata: {
+        issuer: ISSUER,
+        authorization_endpoint: `${ISSUER}/authorize`,
+        token_endpoint: `${ISSUER}/token`,
+        response_types_supported: ['code'],
+      },
+      verifier: { jwksUri: `${ISSUER}/jwks` },
+      resolve: () =>
+        createPrincipal<'cases:write'>(
+          { issuer: ISSUER, sub: 'dana', email: 'dana@acme.com', emailVerified: true, claims: {} },
+          ['editor'],
+          ['cases:write'],
+        ),
+      createServer,
+    });
+
+    story.when('somebody calls the routed tool');
+    const response = await fetchHandler(
+      call(
+        `Bearer ${await token()}`,
+        {},
+        {
+          method: 'tools/call',
+          params: { name: 'update_case', arguments: {} },
+        },
+      ),
+    );
+
+    story.then('the request is answered rather than crashing on the missing principal');
+    expect(response.status).toBeLessThan(500);
+  });
+
+  it('requires the step-up scope on a resource reached through a URI template', async ({ task }) => {
+    story.init(task, { tags: ['scopes', 'resources'], covers: ['src/handler.ts', 'src/scopes.ts'] });
+    stubJwks();
+
+    story.given('a templated resource priced for a scope beyond the baseline');
+    const policy = definePolicy({
+      roles: { reader: ['cases:read'] },
+      rules: [{ match: { email: 'dana@acme.com' }, role: 'reader' }],
+    });
+    const { resource, server } = authz(policy);
+    const createServer = server(
+      [
+        resource(
+          'case',
+          {
+            permission: 'cases:read',
+            uri: new ResourceTemplate('cases://case/{id}', { list: undefined }),
+          },
+          async (uri) => ({ contents: [{ uri: uri.href, text: 'one case' }] }),
+        ),
+      ],
+      { name: 'test', version: '1.0.0' },
+    );
+
+    const fetchHandler = createMcpFetch({
+      resourceServerUrl: RESOURCE,
+      oauthMetadata: {
+        issuer: ISSUER,
+        authorization_endpoint: `${ISSUER}/authorize`,
+        token_endpoint: `${ISSUER}/token`,
+        response_types_supported: ['code'],
+      },
+      verifier: { jwksUri: `${ISSUER}/jwks` },
+      policy,
+      capabilityScopes: { 'resource:cases://case/{id}': 'cases:sensitive' },
+      createServer,
+    });
+
+    story.when('a reader holding only the baseline scope reads one instance of it');
+    const response = await fetchHandler(
+      call(
+        `Bearer ${await token()}`,
+        {},
+        {
+          method: 'resources/read',
+          params: { uri: 'cases://case/C1' },
+        },
+      ),
+    );
+    story.code({
+      label: 'Challenge',
+      content: response.headers.get('WWW-Authenticate') ?? '(none)',
+      lang: 'text',
+    });
+
+    story.then('the step-up is demanded, even though the key is a template and the request a URI');
+    story.note(
+      'The scope map is keyed by the template as registered; the request carries one concrete ' +
+        'URI. An exact-string lookup between the two silently skips the step-up.',
+    );
+    expect(response.status).toBe(403);
+    expect(response.headers.get('WWW-Authenticate')).toMatch(/insufficient_scope/);
   });
 });

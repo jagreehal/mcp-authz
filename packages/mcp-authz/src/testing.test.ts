@@ -193,4 +193,92 @@ describe('recordCapabilities', () => {
     // and CI needs a baseline it can compare without a test runner.
     expect(generated.FINGERPRINTS).toEqual(record.fingerprints);
   });
+
+  it('records the URI each resource answers on, so a proxy can price a read', async () => {
+    const record = await recordCapabilities(serverWithEveryKind);
+
+    expect(record.resourceUris).toEqual({
+      'resource:cases': 'cases://all',
+      'resource:case': 'cases://case/{id}',
+    });
+
+    const generated = (await importGenerated(toPermissionsModule(record))) as {
+      RESOURCE_URIS: Record<string, string>;
+    };
+    expect(generated.RESOURCE_URIS['resource:case']).toBe('cases://case/{id}');
+  });
+
+  it('emits a module that still parses when a URI carries quotes or a backslash', async () => {
+    const generated = (await importGenerated(
+      toPermissionsModule({
+        names: ["it's", 'resource:odd'],
+        fingerprints: { "it's": 'aaaa', 'resource:odd': 'bbbb' },
+        resourceUris: { 'resource:odd': "cases://all?q='x'&p=\\y" },
+      }),
+    )) as { PERMISSIONS: Record<string, string>; RESOURCE_URIS: Record<string, string> };
+
+    expect(generated.RESOURCE_URIS['resource:odd']).toBe("cases://all?q='x'&p=\\y");
+    expect(Object.keys(generated.PERMISSIONS)).toContain("it's");
+  });
+
+  it('keeps a capability named __proto__, with its fingerprint intact', async () => {
+    // Built with a computed key on purpose: `{ __proto__: 'aaaa' }` would lose
+    // the value here too, and a fixture that cannot hold the input cannot test
+    // whether the output kept it.
+    const generated = (await importGenerated(
+      toPermissionsModule({
+        names: ['__proto__', 'search_cases'],
+        fingerprints: { ['__proto__']: 'aaaa', search_cases: 'bbbb' },
+        resourceUris: {},
+      }),
+    )) as { PERMISSIONS: Record<string, string>; FINGERPRINTS: Record<string, string> };
+
+    // `__proto__: value` in an object literal sets the prototype instead of
+    // creating a property, so a tool by that name would vanish from the map
+    // that prices it — and an unpriced capability is the whole failure this
+    // file exists to prevent.
+    expect(Object.keys(generated.PERMISSIONS).sort()).toEqual(['__proto__', 'search_cases']);
+    expect(generated.FINGERPRINTS['__proto__']).toBe('aaaa');
+  });
+
+  it('records a real fingerprint for an upstream tool named __proto__', async () => {
+    // The TypeScript SDK cannot register that name — its own tool registry is a
+    // plain object, so it reports one already registered. A proxy records
+    // servers it did not write, and nothing stops a Python or hand-rolled one
+    // advertising it, so the listing is rewritten on the way back to stand in
+    // for such an upstream.
+    const handler = createMcpHandler(() => serverWithEveryKind(), { legacy: 'stateless' });
+    const record = await recordUpstream('https://vendor.example/mcp', {
+      bearer: 'service-token',
+      fetch: (async (url: string | URL, init?: RequestInit) => {
+        const response = await handler.fetch(new Request(String(url), init));
+        const text = await response.text();
+        return new Response(text.replaceAll('"get_case"', '"__proto__"'), {
+          status: response.status,
+          headers: response.headers,
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    expect(record.names).toContain('__proto__');
+    // Still an ordinary object: a null-prototype dictionary would keep the
+    // digest but break every consumer calling a method on a published Record.
+    expect(Object.getPrototypeOf(record.fingerprints)).toBe(Object.prototype);
+    // Called on the object on purpose: reaching it through Object.prototype
+    // would pass on a null-prototype dictionary too, which is the regression
+    // this guards against.
+    // eslint-disable-next-line no-prototype-builtins
+    expect(record.fingerprints.hasOwnProperty('__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(record.resourceUris)).toBe(Object.prototype);
+    // Assigning a string through the inherited `__proto__` setter is a no-op,
+    // so the digest is dropped on the way in and the generated map carries an
+    // empty string — a capability that can never drift, because nothing was
+    // recorded to compare against.
+    expect(record.fingerprints['__proto__']).toMatch(/^[0-9a-f]{16}$/);
+
+    const generated = (await importGenerated(toPermissionsModule(record))) as {
+      FINGERPRINTS: Record<string, string>;
+    };
+    expect(generated.FINGERPRINTS['__proto__']).toBe(record.fingerprints['__proto__']);
+  });
 });

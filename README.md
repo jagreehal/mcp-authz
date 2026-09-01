@@ -307,6 +307,19 @@ pnpm --filter mcp-authz-node-example start
 
 For Python, see the official-SDK [example](apps/python-example/README.md).
 
+## Skills for coding agents
+
+[`skills/`](skills/) holds reference cards an agent can load when writing against
+this library — the API surface, the label vocabulary, and the mistakes that are
+easy to make and quiet when made.
+
+| Skill                                                                  | Covers                                          |
+| ---------------------------------------------------------------------- | ----------------------------------------------- |
+| [`mcp-authz-authz`](skills/mcp-authz-authz/SKILL.md)                   | Declaring permissions on capabilities you write |
+| [`mcp-authz-gate`](skills/mcp-authz-gate/SKILL.md)                     | Gating a server you did not write               |
+| [`mcp-authz-proxy`](skills/mcp-authz-proxy/SKILL.md)                   | Fronting an upstream reachable only by URL      |
+| [`mcp-authz-permission-map`](skills/mcp-authz-permission-map/SKILL.md) | Recording, pricing and drift-checking the map   |
+
 ## Spec stance (2026-07-28)
 
 - Streamable HTTP via `@modelcontextprotocol/server` `createMcpHandler` (stateless, no `Mcp-Session-Id`)

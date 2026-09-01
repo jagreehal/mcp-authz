@@ -30,6 +30,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./proxy": {
+      "types": "./dist/proxy.d.ts",
+      "import": "./dist/proxy.js"
     }
   },
   "files": [
@@ -60,11 +64,12 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
+    "awaitly": "4.5.0",
     "jose": "^6.2.10"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/client": "^2.0.0"
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/node": {

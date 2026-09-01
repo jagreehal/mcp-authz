@@ -480,6 +480,30 @@ Tags: `security`
 - **Then** the baseline scope applies and the bearer gate still refuses it
   > Only a POST can be checked body against headers, so anything else is held to the baseline rather than to what its headers asked for.
 
+### ✅ survives a routed capability when the resolver mode has no principal
+
+Tags: `resolver`
+
+- **Given** a server whose capabilities carry route permissions
+- **And** a gate wired in resolver mode, which decides access itself and has no principal
+- **When** somebody calls the routed tool
+- **Then** the request is answered rather than crashing on the missing principal
+
+### ✅ requires the step-up scope on a resource reached through a URI template
+
+Tags: `resources`, `scopes`
+
+- **Given** a templated resource priced for a scope beyond the baseline
+- **When** a reader holding only the baseline scope reads one instance of it
+  **Challenge**
+
+  ```text
+  Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
+  ```
+
+- **Then** the step-up is demanded, even though the key is a template and the request a URI
+  > The scope map is keyed by the template as registered; the request carries one concrete URI. An exact-string lookup between the two silently skips the step-up.
+
 ## src/policy.story.test.ts
 
 ### Deciding what a caller may do
@@ -544,3 +568,409 @@ Tags: `operations`, `policy`
 - **And** the unused permission is only a warning
   > Granting a role ahead of the tool that will use it is how a staged rollout works. Failing the boot on it teaches people to add dummy tools to deploy.
 - **And** a policy that matches its tools starts silently
+
+## src/proxy.story.test.ts
+
+### createMcpProxy
+
+### ✅ returns 401 before the upstream is contacted when there is no bearer
+
+Tags: `proxy`, `security`
+
+- **When** a client connects with no bearer token
+  **What the client got back**
+
+  ```text
+  Error POSTing to endpoint: {"error":"invalid_token","error_description":"Missing Authorization header"}
+  ```
+
+- **Then** the proxy refuses it and the upstream is never called
+
+### ✅ returns 403 when the policy grants nothing
+
+Tags: `policy`, `proxy`
+
+- **When** someone whose policy role grants no permissions connects
+- **Then** the proxy refuses before forwarding
+
+### ✅ filters tools/list to what the reader may reach
+
+Tags: `catalogue`, `proxy`
+
+**Catalogue**
+
+<details>
+<summary>snapshot</summary>
+
+```json
+{
+  "tools": ["get_case", "search_cases"],
+  "prompts": ["triage"],
+  "resources": ["cases"],
+  "resourceTemplates": ["case"]
+}
+```
+
+</details>
+
+- **Then** read tools survive and write tools are hidden
+
+### ✅ forwards a permitted tools/call
+
+Tags: `proxy`
+
+- **When** the reader calls a read tool
+  **get_case C1**
+
+  ```text
+  case C1
+  ```
+
+- **Then** the upstream answer comes back through the proxy
+
+### ✅ refuses a denied tools/call before the upstream runs
+
+Tags: `proxy`, `security`
+
+- **When** the reader names a write tool without listing first
+- **Then** the proxy refuses it and the upstream is never asked for the call
+
+### ✅ filters prompts and resources the same way as tools
+
+Tags: `catalogue`, `proxy`
+
+- **Then** the reader sees the read catalogue across all four kinds
+
+### ✅ returns insufficient_scope when the token lacks a required step-up scope
+
+Tags: `proxy`, `scopes`
+
+- **When** the lead calls a write tool with only the baseline scope
+  **What the client got back**
+
+  ```text
+  {"error":"insufficient_scope","error_description":"Insufficient scope"}
+  ```
+
+- **Then** the proxy asks for the missing scope instead of forwarding
+
+### ✅ passes SSE upstream bodies through without parsing them
+
+Tags: `proxy`, `streaming`
+
+- **Then** the event stream is forwarded unchanged
+
+### ✅ filters JSON listing responses from the upstream
+
+Tags: `catalogue`, `proxy`
+
+### ✅ refuses a POST whose routing headers disagree with its body
+
+Tags: `proxy`, `security`
+
+- **Given** a reader who may not write
+- **When** they label a write call as a harmless listing in the Mcp-Method header
+  **What the client got back**
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "error": {
+      "code": -32020,
+      "message": "Bad Request: the request headers and body disagree: the body names method tools/call but the Mcp-Method header names tools/list",
+      "data": {
+        "mismatch": {
+          "header": "tools/list",
+          "body": "the body names method tools/call but the Mcp-Method header names tools/list"
+        }
+      }
+    },
+    "id": 1
+  }
+  ```
+
+- **Then** the proxy refuses it rather than trusting the header
+- **And** the upstream never sees the smuggled call
+
+### ✅ authorises a resources/read by URI, template included
+
+Tags: `proxy`, `resources`
+
+- **When** the reader reads the static resource the catalogue offered her
+- **Then** the upstream answer comes back
+- **And** she reads one that only a URI template covers
+- **And** the template matches and the read is allowed
+
+### ✅ refuses a resources/read that no priced URI covers
+
+Tags: `proxy`, `security`
+
+- **When** the reader names a URI outside every priced resource
+  **What the client got back**
+
+  ```text
+  Error POSTing to endpoint: {"error":"forbidden","reason":"policy_denied","error_description":"dana@acme.com matches no rule in the capability 'secrets://payroll' is not priced in the permission map, so they hold no permissions. Ask an administrator to grant them a role."}
+  ```
+
+- **Then** the proxy refuses it and the upstream never sees the read
+
+### ✅ does not put the upstream framing headers on a body it rewrote
+
+Tags: `proxy`, `streaming`
+
+**Framing**
+
+<details>
+<summary>snapshot</summary>
+
+```json
+{
+  "contentLength": null,
+  "contentEncoding": null,
+  "actualBytes": 69
+}
+```
+
+</details>
+
+- **Then** the stale length and encoding are dropped rather than copied onto the shorter body
+
+### ✅ does not forward the caller credentials meant for the proxy
+
+Tags: `proxy`, `security`
+
+- **When** a browser-borne request arrives carrying a session cookie
+  **Upstream saw**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "cookie": null,
+    "authorization": "Bearer service-token"
+  }
+  ```
+
+    </details>
+
+- **Then** the upstream gets the service credential and none of the caller cookies
+
+### ✅ lets a genuine failure reach the host instead of flattening it to a 500
+
+Tags: `operations`, `proxy`
+
+- **When** a step fails for a reason that is nobody policy decision
+  **What escaped the proxy**
+
+  ```text
+  TypeError: upstream DNS exploded
+  ```
+
+- **Then** the original error propagates, with its type and message intact
+  > A refusal is a considered answer and is returned. A bug is not, and belongs to whatever runs this process — swallowing it into a 500 would lose the stack that explains it.
+
+### ✅ requires a resource step-up scope, matched by URI against the label it was keyed by
+
+Tags: `proxy`, `scopes`
+
+- **When** a reader with only the baseline scope reads a resource priced for step-up
+  **Challenge**
+
+  ```text
+  Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
+  ```
+
+- **Then** the proxy asks for the missing scope rather than serving the read
+  > The scope map is keyed by label, and the request carries a URI. Looking one up as the other is a step-up that silently never happens.
+
+### ✅ refuses a URI a privileged template also covers, whatever the map order
+
+Tags: `proxy`, `security`
+
+- **Given** a broad readable template listed before a narrow privileged one
+- **When** a reader reads a URI both of them match
+- **Then** the proxy refuses, because it cannot know which one the upstream will route to
+
+### ✅ filters an SSE listing whatever shape the event framing takes
+
+Tags: `proxy`, `streaming`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+
+
+```
+
+- **Then** the write tool is gone from the stream, not merely from the JSON shape
+
+### ✅ refuses a listing it cannot read rather than passing it through
+
+Tags: `proxy`, `security`
+
+- **When** the upstream answers a listing in a content type the proxy cannot filter
+  **What reached the client**
+
+  ```text
+  {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list came back as 'text/plain'."}}
+  ```
+
+- **Then** the catalogue is withheld rather than served unfiltered
+  > Failing open here would hand every caller the full catalogue on a content-type change.
+
+### ✅ delivers a filtered event before the upstream stream has finished
+
+Tags: `proxy`, `streaming`
+
+- **When** the upstream sends one event and then holds the connection open
+  **First event through**
+
+  ```text
+  data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+
+
+  ```
+
+- **Then** the filtered event arrives while the stream is still open
+- **And** the write tool never appears in it
+
+### ✅ filters an SSE listing framed with bare carriage returns and a byte-order mark
+
+Tags: `proxy`, `streaming`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+```
+
+- **Then** the catalogue is filtered rather than passed through unread
+
+### ✅ refuses an SSE event that never ends rather than growing to hold it
+
+Tags: `proxy`, `security`
+
+- **When** an upstream sends an event with no terminator, larger than the cap
+  **What reached the client**
+
+  ```text
+  event: message
+  data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list sent an event over 512 bytes."}}
+
+
+  ```
+
+- **Then** the proxy stops rather than buffering whatever the upstream sends
+  > Otherwise a broken or hostile upstream decides how much memory this process spends.
+
+### ✅ filters an SSE listing whose two line endings differ from each other
+
+Tags: `proxy`, `streaming`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+
+
+```
+
+- **Then** the boundary is recognised and the catalogue filtered, without waiting for EOF
+
+### ✅ refuses an oversized event whether or not its terminator shares a chunk
+
+Tags: `proxy`, `security`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list sent an event over 512 bytes."}}
+
+
+```
+
+- **Then** the cap holds regardless of how the transport happened to split it
+  > A limit that depends on chunk boundaries is a limit an upstream can choose to miss.
+
+### ✅ answers an unfilterable event under the id the client is waiting on
+
+Tags: `proxy`, `streaming`
+
+- **When** the upstream sends an event the proxy cannot read
+  **Error envelope**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32010,
+      "message": "Bad Gateway: this catalogue could not be filtered — tools/list carried an unreadable event."
+    }
+  }
+  ```
+
+    </details>
+
+- **Then** the error carries the request id, so the caller stops waiting on it
+  > An error with id null matches no pending request. A client that ignores it leaves the original listing outstanding for as long as the stream stays open.
+
+### ✅ refuses a JSON catalogue larger than the cap instead of buffering it
+
+Tags: `proxy`, `security`
+
+- **When** the upstream answers a listing with a body far over the cap
+  **What reached the client**
+
+  ```text
+  {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list was over 512 bytes or not readable as JSON-RPC."}}
+  ```
+
+- **Then** the cap applies to what comes back, not only to what goes out
+  > It is advertised as bounding a message in either direction, so it has to.
+
+### ✅ measures the event cap in bytes, not in UTF-16 units
+
+Tags: `proxy`, `security`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list sent an event over 700 bytes."}}
+
+
+```
+
+- **Then** a cap in bytes is enforced in bytes, whatever alphabet the content is in
+  > Otherwise the advertised limit is three times larger for anyone not writing ASCII.
+
+### ✅ finds an event boundary split across two chunks
+
+Tags: `proxy`, `streaming`
+
+**What reached the client**
+
+```text
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+
+
+```
+
+- **Then** the event is recognised and filtered without waiting for the stream to end
+
+### ✅ counts bytes correctly when multibyte characters straddle chunks
+
+Tags: `proxy`, `streaming`
+
+- **Then** the byte cap still refuses it, counted over the reassembled event

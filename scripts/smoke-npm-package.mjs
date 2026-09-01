@@ -52,6 +52,15 @@ try {
     ],
     { cwd: consumer, stdio: 'inherit' },
   );
+  execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { createMcpProxy } from 'mcp-authz/proxy'; if (typeof createMcpProxy !== 'function') process.exit(1);",
+    ],
+    { cwd: consumer, stdio: 'inherit' },
+  );
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

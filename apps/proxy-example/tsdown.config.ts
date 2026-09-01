@@ -1,19 +1,15 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
+  // Match the paths `start` and wrangler.toml name. Without this tsdown emits
+  // `.mjs`, and both production entrypoints fail after a clean build.
   outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
-  tsconfig: 'tsconfig.build.json',
   entry: {
-    index: 'src/index.ts',
     node: 'src/node.ts',
-    policy: 'src/policy.ts',
-    cli: 'src/cli.ts',
-    testing: 'src/testing.ts',
-    proxy: 'src/proxy.ts',
+    worker: 'src/worker.ts',
   },
   format: ['esm'],
   dts: true,
   clean: true,
   sourcemap: false,
-  target: false,
 });

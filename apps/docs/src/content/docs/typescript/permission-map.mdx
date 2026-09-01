@@ -75,6 +75,21 @@ export const PERMISSIONS = {
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 ```
 
+When the server serves resources the module carries a third export, mapping each
+`resource:` label to the URI or template it answers on:
+
+```ts
+export const RESOURCE_URIS = {
+  'resource:case': 'cases://case/{id}',
+} as const;
+```
+
+`gate()` never needs it — the SDK routes a read to the registration that claimed
+the URI. [`createMcpProxy`](/mcp-authz/typescript/proxy/) does, because a
+`resources/read` carries a URI and never a label, and a proxy has no
+registrations to route against. It refuses to boot without one for every priced
+resource.
+
 Every capability is priced `TODO:unassigned`, and no role grants it, so
 [reconciliation](/mcp-authz/concepts/reconciliation/) reports it unreachable and
 the boot refuses. The file is deliberately useless until a person has said what

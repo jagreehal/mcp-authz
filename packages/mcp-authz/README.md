@@ -34,7 +34,7 @@ flowchart TD
     Q["How much of the server can you reach?"]
     Q -->|"You write the tools"| A["<b>authz()</b><br/>permissions declared on the capability,<br/>names checked by tsc,<br/>catalogue reconciled at boot"]
     Q -->|"You call somebody else's<br/>builder, and it lets you<br/>wrap the server it makes"| B["<b>gate()</b><br/>a permission map over tools<br/>that were never written for one"]
-    Q -->|"All you have is a URL"| C["A gateway<br/>no in-process seam exists to use"]
+    Q -->|"All you have is a URL"| C["<b>createMcpProxy</b><br/>record the catalogue,<br/>enforce at the edge"]
 ```
 
 The middle rung is the one people miss. A package you install, whose tools you
@@ -527,6 +527,41 @@ enforced at boot: a digest in production is a second source of truth, and would
 make a description edit an outage.
 
 `@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
+
+### `createMcpProxy` — URL-only upstream
+
+When there is no builder hook, `mcp-authz/proxy` sits in front of a vendor MCP
+reached only by URL:
+
+```ts
+import { createMcpProxy } from 'mcp-authz/proxy';
+
+export default createMcpProxy({
+  resourceServerUrl: new URL(process.env.MCP_PUBLIC_URL!),
+  oauthMetadata: {/* same as createMcpFetch */},
+  verifier: { jwksUri: process.env.OAUTH_JWKS_URI! },
+  policy,
+  permissions: PERMISSIONS, // from recordUpstream → toPermissionsModule
+  resourceUris: RESOURCE_URIS, // same module; a read names a URI, not a label
+  upstream: {
+    url: process.env.UPSTREAM_URL!,
+    bearer: process.env.UPSTREAM_TOKEN!,
+  },
+});
+```
+
+Record the upstream with `recordUpstream` or `mcp-authz record --upstream`, price
+the map, deploy the proxy.
+
+The proxy is stricter than embed mode, because nothing downstream of it re-checks
+anything and it forwards on a service credential that outranks the caller.
+Routing headers that disagree with the body are refused rather than forwarded; a
+request with no routing headers is authorized from the body, which is what the
+upstream will act on; and a capability the map does not price is refused outright.
+The caller's `Authorization` and `Cookie` stay at the edge.
+
+See [proxy mode](https://jagreehal.github.io/mcp-authz/typescript/proxy/) and the
+[`proxy-example`](../../apps/proxy-example) app.
 
 ### Boot-time reconciliation
 
