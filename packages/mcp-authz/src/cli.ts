@@ -22,6 +22,7 @@ const USAGE = `mcp-authz — inspect a policy without running a server
 
   mcp-authz check <policy.json> [--capabilities <map.json>]
   mcp-authz record <connector.ts> [--out <permissions.ts>]
+  mcp-authz record --upstream <url> [--token <bearer>] [--out <permissions.ts>]
   mcp-authz explain <policy.json> --identity <identity.json>|- [--capabilities <map.json>]
 
 Files
@@ -43,6 +44,8 @@ export function main(argv: readonly string[]): number | Promise<number> {
       capabilities: { type: 'string' },
       identity: { type: 'string' },
       out: { type: 'string' },
+      upstream: { type: 'string' },
+      token: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -55,11 +58,14 @@ export function main(argv: readonly string[]): number | Promise<number> {
   // `record` takes a module rather than a policy, so it branches before the
   // policy file is read.
   if (command === 'record') {
+    if (values.upstream) return record({ upstream: values.upstream, token: values.token }, values.out);
     if (!policyPath) {
-      process.stderr.write('record needs a path to a module whose default export builds the server.\n');
+      process.stderr.write(
+        'record needs a module whose default export builds the server, or --upstream <url>.\n',
+      );
       return 1;
     }
-    return record(policyPath, values.out);
+    return record({ module: policyPath }, values.out);
   }
   if (!policyPath) {
     process.stderr.write(`${command} needs a path to a policy file.\n`);
@@ -91,7 +97,9 @@ export function main(argv: readonly string[]): number | Promise<number> {
  * peer, so the other commands keep the CLI's no-dependency property and only
  * somebody running `record` is asked to install anything.
  */
-async function record(modulePath: string, out: string | undefined): Promise<number> {
+type RecordSource = { module: string } | { upstream: string; token?: string };
+
+async function record(source: RecordSource, out: string | undefined): Promise<number> {
   let toolkit: typeof import('./testing');
   try {
     toolkit = await import('./testing');
@@ -103,18 +111,24 @@ async function record(modulePath: string, out: string | undefined): Promise<numb
     return 1;
   }
 
-  const loaded = (await import(pathToFileURL(resolve(modulePath)).href)) as {
-    default?: () => unknown;
-  };
-  if (typeof loaded.default !== 'function') {
-    process.stderr.write(`${modulePath} must default-export a function that builds the server.\n`);
-    return 1;
+  let capabilities;
+  if ('upstream' in source) {
+    // Only a URL and a credential: the case the library has always told people
+    // to solve with a gateway. Reading it is not enforcing it.
+    capabilities = await toolkit.recordUpstream(source.upstream, { bearer: source.token });
+  } else {
+    const loaded = (await import(pathToFileURL(resolve(source.module)).href)) as {
+      default?: () => unknown;
+    };
+    if (typeof loaded.default !== 'function') {
+      process.stderr.write(`${source.module} must default-export a function that builds the server.\n`);
+      return 1;
+    }
+    capabilities = await toolkit.recordCapabilities(loaded.default as never);
   }
-
-  const capabilities = await toolkit.recordCapabilities(loaded.default as never);
-  const source = toolkit.toPermissionsModule(capabilities);
-  if (out) writeFileSync(out, source);
-  else process.stdout.write(source);
+  const generated = toolkit.toPermissionsModule(capabilities);
+  if (out) writeFileSync(out, generated);
+  else process.stdout.write(generated);
   return 0;
 }
 

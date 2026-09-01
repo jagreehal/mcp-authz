@@ -1,5 +1,10 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { z } from 'zod';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -137,5 +142,39 @@ describe('record', () => {
     // in the redirected file and makes it fail to parse.
     expect(out).not.toContain('does not advertise');
     expect(out.trimStart().startsWith('//')).toBe(true);
+  });
+
+  it('records an upstream nobody can wrap, given only its URL', async () => {
+    const upstream = createMcpHandler(() => {
+      const server = new McpServer({ name: 'vendor', version: '9.9.9' }, { capabilities: { tools: {} } });
+      server.registerTool(
+        'get_case',
+        { description: 'Read one case', inputSchema: { id: z.string() } },
+        async () => ({ content: [] }),
+      );
+      return server;
+    });
+    const http = createServer(toNodeHandler(upstream));
+    await new Promise<void>((ready) => http.listen(0, '127.0.0.1', ready));
+    const { port } = http.address() as AddressInfo;
+    const out = join(dir, 'upstream-permissions.ts');
+
+    try {
+      const code = await main([
+        'record',
+        '--upstream',
+        `http://127.0.0.1:${port}/mcp`,
+        '--token',
+        'service-token',
+        '--out',
+        out,
+      ]);
+
+      expect(code).toBe(0);
+      const generated = (await import(pathToFileURL(out).href)) as { PERMISSIONS: Record<string, string> };
+      expect(generated.PERMISSIONS).toEqual({ get_case: 'TODO:unassigned' });
+    } finally {
+      await new Promise<void>((closed) => http.close(() => closed()));
+    }
   });
 });

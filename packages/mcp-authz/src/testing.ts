@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Client } from '@modelcontextprotocol/client';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { InMemoryTransport, type McpServer } from '@modelcontextprotocol/server';
 
 /**
@@ -56,6 +56,40 @@ export async function recordCapabilities(
   await client.connect(clientTransport);
 
   try {
+    return await listFrom(client);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+/**
+ * Record a server you can only reach by URL.
+ *
+ * The objection that rules out listing a *gated* server does not apply here: an
+ * upstream reached with a service credential answers with everything it has, so
+ * the map is complete. Pass `fetch` to drive a handler directly instead of a
+ * socket.
+ */
+export async function recordUpstream(
+  url: string | URL,
+  options: { bearer?: string; fetch?: typeof fetch } = {},
+): Promise<CapabilityRecord> {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.bearer ? { authProvider: { token: async () => options.bearer as string } } : {}),
+  });
+  const client = new Client({ name: 'mcp-authz-record-capabilities', version: '1.0.0' });
+  await client.connect(transport);
+  try {
+    return await listFrom(client);
+  } finally {
+    await client.close();
+  }
+}
+
+async function listFrom(client: Client): Promise<CapabilityRecord> {
+  {
     // Ask only for what the server said it has. The SDK answers an unadvertised
     // list with a warning and an empty result, and that warning is written to
     // stdout — which is the generated module when the caller redirects it.
@@ -86,9 +120,6 @@ export async function recordCapabilities(
       fingerprints[label] = digest({ label, definition: byLabel.get(label) });
     }
     return { names, fingerprints };
-  } finally {
-    await client.close();
-    await server.close();
   }
 }
 

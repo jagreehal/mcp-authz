@@ -60,3 +60,14 @@ the same map. `mcp-authz/testing` is loaded lazily, so the other commands keep
 the CLI's no-dependency property and only `record` asks you to install the
 client.
 
+`recordUpstream(url, { bearer })` records a server you can only reach by URL, in
+the same labels `gate()` uses, so one map serves either enforcement location:
+
+```bash
+npx mcp-authz record --upstream https://vendor.example/mcp --token $SERVICE_TOKEN
+```
+
+The objection that rules out listing a gated server does not apply upstream: a
+service credential is shown everything, so the map is complete. Fingerprints
+matter more here than anywhere — an upstream you do not control can change its
+capability surface underneath you, and this is what turns that into a diff.

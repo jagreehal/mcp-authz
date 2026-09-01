@@ -1,4 +1,4 @@
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
+import { createMcpHandler, McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { definePolicy, reconcile } from './policy';
-import { recordCapabilities, toPermissionsModule } from './testing';
+import { recordCapabilities, recordUpstream, toPermissionsModule } from './testing';
 
 /**
  * A server of the shape a published package has: all four kinds of capability,
@@ -162,5 +162,25 @@ describe('recordCapabilities', () => {
     // load-bearing as a tool's input schema.
     expect(after.names).toEqual(before.names);
     expect(after.fingerprints['prompt:triage']).not.toBe(before.fingerprints['prompt:triage']);
+  });
+
+  it('records an upstream reached only by URL, in the same vocabulary', async () => {
+    // Somebody else's deployment: all we have is an endpoint and a credential.
+    const handler = createMcpHandler(() => serverWithEveryKind());
+
+    const record = await recordUpstream('https://vendor.example/mcp', {
+      bearer: 'service-token',
+      fetch: ((url: string | URL, init?: RequestInit) =>
+        handler.fetch(new Request(String(url), init))) as unknown as typeof fetch,
+    });
+
+    // The same labels gate() uses, so one map serves either enforcement location.
+    expect(record.names).toEqual([
+      'get_case',
+      'prompt:triage',
+      'resource:case',
+      'resource:cases',
+      'update_case',
+    ]);
   });
 });
