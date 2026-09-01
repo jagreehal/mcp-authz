@@ -1,7 +1,12 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { recordCapabilities } from './testing';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { definePolicy, reconcile } from './policy';
+import { recordCapabilities, toPermissionsModule } from './testing';
 
 /**
  * A server of the shape a published package has: all four kinds of capability,
@@ -86,5 +91,45 @@ describe('recordCapabilities', () => {
     const { names } = await recordCapabilities(toolsOnly);
 
     expect(names).toEqual(['whoami']);
+  });
+
+  /** Generate, then load it the way a consumer would, rather than reading the string. */
+  async function importGenerated(source: string): Promise<Record<string, unknown>> {
+    const file = join(mkdtempSync(join(tmpdir(), 'mcp-authz-scaffold-')), 'permissions.ts');
+    writeFileSync(file, source);
+    return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+  }
+
+  it('prices every discovered capability, so none is left unnamed', async () => {
+    const record = await recordCapabilities(serverWithEveryKind);
+
+    const generated = await importGenerated(toPermissionsModule(record));
+
+    expect(generated.PERMISSIONS).toEqual({
+      get_case: 'TODO:unassigned',
+      'prompt:triage': 'TODO:unassigned',
+      'resource:case': 'TODO:unassigned',
+      'resource:cases': 'TODO:unassigned',
+      update_case: 'TODO:unassigned',
+    });
+  });
+
+  it('generates a map the boot refuses, until a human has priced it', async () => {
+    const record = await recordCapabilities(serverWithEveryKind);
+    const generated = await importGenerated(toPermissionsModule(record));
+    const policy = definePolicy({
+      roles: { reader: ['cases:read'], lead: ['cases:read', 'cases:write'] },
+      rules: [{ match: { domain: 'acme.com' }, role: 'reader' }],
+    });
+
+    const drift = reconcile(
+      policy.roles,
+      new Map(Object.entries(generated.PERMISSIONS as Record<string, string>)),
+    );
+
+    // Unreachable is an error, not a warning: an unpriced capability stops the
+    // server rather than defaulting to everyone or to nobody.
+    expect(drift.error).toContain('get_case');
+    expect(drift.error).toContain('resource:case');
   });
 });

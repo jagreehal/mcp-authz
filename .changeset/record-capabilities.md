@@ -22,6 +22,13 @@ expect(names).toEqual(Object.keys(PERMISSIONS).sort());
 expect(fingerprints).toMatchSnapshot();
 ```
 
+`toPermissionsModule(record)` renders the starting map as TypeScript source —
+`as const` with the derived permission type, so `gate()` infers its union and a
+typo is a build error. Every capability is priced `'TODO:unassigned'`, which no
+role grants, so `reconcile` calls it unreachable and the boot refuses until a
+person decides what each capability costs. A default would make that decision
+for them, quietly.
+
 Build the server **ungated** there. A gated server answers per principal, so
 listing one hands you a map missing exactly the capabilities that most need a
 price.
