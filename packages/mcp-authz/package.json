@@ -26,6 +26,10 @@
     "./policy": {
       "types": "./dist/policy.d.ts",
       "import": "./dist/policy.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
     }
   },
   "files": [
@@ -59,10 +63,14 @@
     "jose": "^6.2.10"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/node": "^2.0.0"
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/node": {
+      "optional": true
+    },
+    "@modelcontextprotocol/client": {
       "optional": true
     }
   },
