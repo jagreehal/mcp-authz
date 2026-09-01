@@ -7,7 +7,9 @@ Protocol revision `2026-07-28`.
 
 - Streamable HTTP via `@modelcontextprotocol/server` `createMcpHandler`
   (stateless, no `Mcp-Session-Id`). Opt in to legacy 2025 handling explicitly;
-  strict `reject` is the default.
+  strict `reject` is the default. Note that the SDK client 2.0.0 still sends the
+  `initialize` handshake 2026-07-28 removed, so reaching today's clients means
+  setting `legacy: 'stateless'`.
 - Standard routing headers are validated against the body before scope
   selection. Missing or dishonest `Mcp-Method` / `Mcp-Name` is HTTP 400 before
   any tool is chosen.

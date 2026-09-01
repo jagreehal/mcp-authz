@@ -32,6 +32,9 @@ importers:
       eslint-config-prettier:
         specifier: ^10.1.8
         version: 10.1.8(eslint@10.9.0(supports-color@7.2.0))
+      eslint-plugin-executable-stories-vitest:
+        specifier: ^2.1.11
+        version: 2.1.11(eslint@10.9.0(supports-color@7.2.0))
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
@@ -118,6 +121,9 @@ importers:
         specifier: ^6.2.10
         version: 6.2.10
     devDependencies:
+      '@modelcontextprotocol/client':
+        specifier: ^2.0.0
+        version: 2.0.0
       '@modelcontextprotocol/node':
         specifier: ^2.0.0
         version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.12.34)
@@ -128,8 +134,8 @@ importers:
         specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
       executable-stories-vitest:
-        specifier: 8.7.0
-        version: 8.7.0(mermaid@11.17.0)(vitest@4.1.11)
+        specifier: 8.8.0
+        version: 8.8.0(mermaid@11.17.0)(vitest@4.1.11)
       tsdown:
         specifier: ^0.22.14
         version: 0.22.14(@typescript/typescript6@6.0.2)(tsx@4.23.12)
@@ -969,6 +975,10 @@ packages:
 
   '@mermaid-js/parser@1.2.1':
     resolution: {integrity: sha512-n12NohV3mrUyUL2o93IgG/ifeW9FTyeJn3zDxkhwa8MJ9Fxg3HQMlA3RiGmD/3UnJvheztkjjQAjA2T4LmUcpw==}
+
+  '@modelcontextprotocol/client@2.0.0':
+    resolution: {integrity: sha512-8f1OghQ2rjzIOfqgUCP+8GiUWqRs89njoWLNqAe8kWmDePv3s1fZXseej+QXemssEuuOvLLmLO/kqM3IQHtISw==}
+    engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@2.0.0':
     resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
@@ -2426,6 +2436,12 @@ packages:
     peerDependencies:
       eslint: '>=7.0.0'
 
+  eslint-plugin-executable-stories-vitest@2.1.11:
+    resolution: {integrity: sha512-KhTI1bU+vXUHG4aE8wcicvMAIaSNPckLPcBef/Co7LX+bAigxpvOYGn96rNPw+HVo9FuZmf6FjJiQSV/k1DNdQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      eslint: '>=10'
+
   eslint-scope@9.1.2:
     resolution: {integrity: sha512-xS90H51cKw0jltxmvmHy2Iai1LIqrfbw57b79w/J7MfvDfkIkFZ+kj6zC3BjtUwh150HsSSdxXZcsuv72miDFQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
@@ -2492,16 +2508,24 @@ packages:
   eventemitter3@5.0.4:
     resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
 
-  executable-stories-core@0.20.0:
-    resolution: {integrity: sha512-LF9wiD8jM0AMVcpADRIRFJuIUBcyN+LK1/0Qnw5DOq1GmMjm9gr7/qYS3wYbKi7HP8SVfqZ8qKyGxWqUDZatmA==}
+  eventsource-parser@3.1.1:
+    resolution: {integrity: sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ==}
+    engines: {node: '>=18.0.0'}
 
-  executable-stories-formatters@1.12.0:
-    resolution: {integrity: sha512-GLCTzloN/SIA/rAnBv5V2Xa73aKUF9mZkVTcRuvVQwPoHOdT8vaxnZzOq6xrmQe9EfiCYyMSHQSGS1mrqDBwrw==}
+  eventsource@3.0.7:
+    resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
+    engines: {node: '>=18.0.0'}
+
+  executable-stories-core@0.21.0:
+    resolution: {integrity: sha512-LGd8aGPLQj+Cj0IiAWTEiaxRTlBNlQ4IHzwhpwoEuQYFnyqxqCxYVb15LQKWZeHy9snRGNWJakH1WkXCtEz8Iw==}
+
+  executable-stories-formatters@1.13.0:
+    resolution: {integrity: sha512-j8gX77Q1/pZ/Co+MEpMMZYjhZUICSlwzcWO1Dw5Pif+BPCbzHy7EA1TpozabPQMRCMnyH1FsnSTe3wZy2WJUPw==}
     engines: {node: '>=22'}
     hasBin: true
 
-  executable-stories-react@0.11.0:
-    resolution: {integrity: sha512-7wowQ43T1HlqJwx44vlpKaB/wXvvugwpmEw0ANyLIshKDBC2QnW3Zyub4DXR34o5DCw4W7m/7FsTuxNeHwYTIA==}
+  executable-stories-react@0.12.0:
+    resolution: {integrity: sha512-JENOmopkIemFp+6RHfitc5t0z/NziKLmMEVp7KE4C4+bpZeDsiSYO7TL9dBOw1WgXbSzDmBqj9Hm4/hiqld5Wg==}
     peerDependencies:
       mermaid: '>=10'
       react: '>=19.2.7'
@@ -2510,8 +2534,8 @@ packages:
       mermaid:
         optional: true
 
-  executable-stories-vitest@8.7.0:
-    resolution: {integrity: sha512-K0t/HQI9+qDsQ00dRXEsaY9hhRZPBRRkfz8H+svR2GRdTcoVuKOZ5lBTQ2lZRcbipzf3YfwO8lJio6rFF4Cy4w==}
+  executable-stories-vitest@8.8.0:
+    resolution: {integrity: sha512-lDBG885mW/Wnm78b2FPOTybKWMoUZnvSJiS0JUp6haCI9bMt3u+JwofGQ20+hZiI/vbtUExyn7xCC+LI41PIew==}
     peerDependencies:
       vitest: '>=4.1.5'
 
@@ -3298,6 +3322,10 @@ packages:
   picomatch@4.0.5:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
+
+  pkce-challenge@5.0.1:
+    resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
+    engines: {node: '>=16.20.0'}
 
   points-on-curve@0.2.0:
     resolution: {integrity: sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A==}
@@ -4878,6 +4906,16 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
+  '@modelcontextprotocol/client@2.0.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      jose: 6.2.10
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
       zod: 4.4.3
@@ -6253,6 +6291,10 @@ snapshots:
     dependencies:
       eslint: 10.9.0(supports-color@7.2.0)
 
+  eslint-plugin-executable-stories-vitest@2.1.11(eslint@10.9.0(supports-color@7.2.0)):
+    dependencies:
+      eslint: 10.9.0(supports-color@7.2.0)
+
   eslint-scope@9.1.2:
     dependencies:
       '@types/esrecurse': 4.3.1
@@ -6352,15 +6394,21 @@ snapshots:
 
   eventemitter3@5.0.4: {}
 
-  executable-stories-core@0.20.0: {}
+  eventsource-parser@3.1.1: {}
 
-  executable-stories-formatters@1.12.0(mermaid@11.17.0):
+  eventsource@3.0.7:
+    dependencies:
+      eventsource-parser: 3.1.1
+
+  executable-stories-core@0.21.0: {}
+
+  executable-stories-formatters@1.13.0(mermaid@11.17.0):
     dependencies:
       '@cucumber/html-formatter': 23.1.0(@cucumber/messages@32.3.1)
       '@cucumber/messages': 32.3.1
       ajv: 8.20.0
-      executable-stories-core: 0.20.0
-      executable-stories-react: 0.11.0(mermaid@11.17.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      executable-stories-core: 0.21.0
+      executable-stories-react: 0.12.0(mermaid@11.17.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       github-slugger: 2.0.0
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
@@ -6372,13 +6420,13 @@ snapshots:
       - date-fns
       - mermaid
 
-  executable-stories-react@0.11.0(mermaid@11.17.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
+  executable-stories-react@0.12.0(mermaid@11.17.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
     dependencies:
       '@base-ui/react': 1.6.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       cmdk: 1.1.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      executable-stories-core: 0.20.0
+      executable-stories-core: 0.21.0
       lucide-react: 0.469.0(react@19.2.8)
       marked: 18.0.7
       react: 19.2.8
@@ -6393,10 +6441,10 @@ snapshots:
       - '@types/react-dom'
       - date-fns
 
-  executable-stories-vitest@8.7.0(mermaid@11.17.0)(vitest@4.1.11):
+  executable-stories-vitest@8.8.0(mermaid@11.17.0)(vitest@4.1.11):
     dependencies:
-      executable-stories-core: 0.20.0
-      executable-stories-formatters: 1.12.0(mermaid@11.17.0)
+      executable-stories-core: 0.21.0
+      executable-stories-formatters: 1.13.0(mermaid@11.17.0)
       fast-glob: 3.3.3
       picomatch: 4.0.5
       vitest: 4.1.11(@types/node@26.2.0)(@vitest/coverage-v8@4.1.11)(vite@8.2.0(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.12)(yaml@2.9.0))
@@ -7554,6 +7602,8 @@ snapshots:
   picomatch@2.3.2: {}
 
   picomatch@4.0.5: {}
+
+  pkce-challenge@5.0.1: {}
 
   points-on-curve@0.2.0: {}
 

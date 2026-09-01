@@ -1,4 +1,4 @@
-import { StoryReporter } from 'executable-stories-vitest/reporter';
+import { createStoryReporter } from 'executable-stories-vitest/reporter';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -13,7 +13,7 @@ export default defineConfig({
     },
     reporters: [
       'default',
-      new StoryReporter({
+      createStoryReporter({
         formats: ['markdown'],
         outputDir: 'docs',
         outputName: 'stories',

@@ -67,11 +67,12 @@
     }
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@types/node": "^26.2.0",
-    "executable-stories-vitest": "8.7.0",
-    "tsdown": "^0.22.14",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "executable-stories-vitest": "8.8.0",
+    "tsdown": "^0.22.14",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"

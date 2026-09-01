@@ -1,5 +1,224 @@
 # User Stories
 
+## src/e2e.story.test.ts
+
+### A published server somebody else wrote, gated per person
+
+### ✅ gives a reader a catalogue that stops at what she may do
+
+Tags: `e2e`, `gate`
+
+- **Given** case-tracker 3.2.0, a server this library did not write
+
+  > The fixture is deliberately not a stub with one tool on it. It registers all four kinds of capability, because the three that are not tools are the ones deployments forget to gate.
+  > **What the package registers**
+
+  ```json
+  {
+    "tools": ["search_cases", "get_case", "update_case"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
+- **And** a permission map that puts a price on every one of them
+
+  > gate() throws on a registration it cannot find here, so a partial map fails the boot.
+  > **Permission map**
+
+  ```json
+  {
+    "search_cases": "cases:read",
+    "get_case": "cases:read",
+    "update_case": "cases:write",
+    "close_run": "cases:write",
+    "prompt:triage": "cases:read",
+    "resource:cases": "cases:read",
+    "resource:case": "cases:read"
+  }
+  ```
+
+- **And** Dana, whom the policy makes a reader
+  > Her token is signed by the test issuer and verified against a real JWKS, like any other.
+  - **label:** Grants
+  - **value:** cases:read
+- **When** she connects with a real MCP client and lists all four kinds
+
+  > A real Client on a real Streamable HTTP transport, whose fetch is the handler. Framing, negotiation, SSE and the bearer header are the genuine article; no port is bound.
+  > **Catalogue**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
+    </details>
+
+- **Then** the two read tools are there, and the write tool is not
+- **And** the prompt, the resource and the template she may read all survive the gate
+- **And** what she can see, she can actually run
+  **get_case C1**
+
+  ```text
+  case C1
+  ```
+
+### ✅ refuses the write tool even when the client names it without listing
+
+Tags: `e2e`, `gate`, `security`
+
+- **Given** the same reader, and a client that skips tools/list entirely
+  > Absence from the catalogue is a context saving, not a security boundary. A model that guessed the name, or a malicious client that read the docs, never consults the list.
+- **When** she calls update_case by name
+  **What the client got back**
+
+  ```text
+  Tool update_case disabled
+  ```
+
+- **Then** the server refuses it, so the hidden entry was never what protected the write
+
+### ✅ widens the same catalogue for a lead, from the same server
+
+Tags: `e2e`, `gate`
+
+- **Given** one handler, one permission map, two people
+  > Nothing about the server changes between these two connections. The only difference is which token arrives, which is the whole claim this library makes.
+- **When** the reader connects
+  **Catalogue**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
+    </details>
+
+- **And** the lead connects to the very same handler
+  **Catalogue**
+  - - tools[2]: "update_case"
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases", "update_case"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
+    </details>
+
+- **Then** update_case has appeared, and nothing else has
+- **And** it runs, so the extra grant is real and not a listing artefact
+
+### ✅ gates a capability the server only registers on some deployments
+
+Tags: `e2e`, `gate`
+
+- **Given** the same package with its optional close_run tool switched on
+  > A real server registers a different catalogue per configuration — a feature flag, a licence tier, an env var. The map prices every branch, so turning one on cannot quietly widen what a reader sees.
+- **When** the reader and the lead each list tools
+  **Who sees the optional tool**
+
+  | Caller        | Tools                                          |
+  | ------------- | ---------------------------------------------- |
+  | Dana (reader) | get_case, search_cases                         |
+  | Alice (lead)  | close_run, get_case, search_cases, update_case |
+
+- **Then** the reader does not see it
+- **And** the lead does, because the map priced it as a write
+
+### The same guarantees on the seam you own
+
+### ✅ presents an authz-defined server identically to a real client
+
+Tags: `authz`, `e2e`
+
+- **Given** the same policy, over tools you declared rather than wrapped
+  > gate() is for code you cannot change; authz() is for code you wrote. This checks the two seams are indistinguishable from outside — the choice is about whose source you can reach, not about how strong the result is.
+- **When** the same reader lists tools against it
+  **Catalogue**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "tools": ["get_case"]
+  }
+  ```
+
+    </details>
+
+- **Then** she sees exactly what the gated server showed her
+- **And** and the write tool is refused here too
+
+### A client from before this protocol version
+
+### ✅ is refused by default, and served when the deployment opts in
+
+Tags: `compatibility`, `e2e`
+
+- **Given** an unmodified SDK client, which opens with an initialize handshake
+  > Revision 2026-07-28 removed that handshake, and the client shipping today still sends it. So "legacy" here does not mean old software — it means every client you can install now.
+  > [SEP-2567 — no initialize handshake](https://modelcontextprotocol.io/specification/2026-07-28)
+- **When** it connects to a deployment left on the default setting
+  **What the client is told**
+
+  ```text
+  Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32022,"message":"Unsupported protocol version: 2025-11-25","data":{"supported":["2026-07-28"],"requested":"2025-11-25"}},"id":0}
+  ```
+
+- **Then** it is turned away, because `legacy: 'reject'` is the default
+- **And** the same client is served once the deployment sets `legacy: 'stateless'`
+- **But** the gate still holds on that path — an older handshake is not a way around it
+
+### A client that cannot prove who it is
+
+### ✅ is turned away before any catalogue exists to filter
+
+Tags: `e2e`, `security`
+
+- **Given** a token minted for a different resource
+
+  > The audience check is what stops a token issued for another service being replayed here. Everything else in this file is about what a verified caller may reach; this is about not being one.
+  > **Token audience**
+
+  ```json
+  {
+    "issued_for": "https://elsewhere.example",
+    "this_server": "https://mcp.acme.com/mcp"
+  }
+  ```
+
+- **When** a client connects with it
+  **What the client is told**
+
+  ```text
+  Unauthorized
+  ```
+
+- **Then** the connection fails, rather than degrading to an anonymous session
+
 ## src/mcp.story.test.ts
 
 ### Connecting Claude through Google
