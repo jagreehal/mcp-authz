@@ -23,7 +23,27 @@ export type CapabilityRecord = {
 };
 
 function digest(parts: unknown): string {
-  return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 16);
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(parts)))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
+ * Key order is an accident of how a value was built, so sort it away. Without
+ * this an SDK that emitted the same definition in a different order would churn
+ * every fingerprint in a snapshot and teach people to ignore the diff.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, inner]) => [key, canonical(inner)]),
+    );
+  }
+  return value;
 }
 
 export async function recordCapabilities(
@@ -54,14 +74,11 @@ export async function recordCapabilities(
     const byLabel = new Map(labelled);
     const fingerprints: Record<string, string> = {};
     for (const label of names) {
-      const entry = byLabel.get(label) as { description?: string; inputSchema?: unknown } | undefined;
-      // Named fields in a fixed order rather than the whole entry: an SDK that
-      // adds or reorders a key must not churn every fingerprint in the snapshot.
-      fingerprints[label] = digest({
-        name: label,
-        description: entry?.description,
-        inputSchema: entry?.inputSchema,
-      });
+      // The whole definition as served, not a chosen handful of fields. A tool
+      // has an inputSchema, a prompt has arguments, a resource template has a
+      // uriTemplate — and picking fields by hand means the next kind of change
+      // is the one nobody fingerprinted.
+      fingerprints[label] = digest({ label, definition: byLabel.get(label) });
     }
     return { names, fingerprints };
   } finally {

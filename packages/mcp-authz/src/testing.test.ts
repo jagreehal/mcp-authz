@@ -13,7 +13,11 @@ import { recordCapabilities, toPermissionsModule } from './testing';
  * because the three that are not tools are the ones a permission map forgets.
  */
 function serverWithEveryKind(
-  overrides: { getCase?: { description?: string; widened?: boolean } } = {},
+  overrides: {
+    getCase?: { description?: string; widened?: boolean };
+    caseTemplate?: { uriTemplate?: string };
+    triage?: { argsSchema?: Record<string, z.ZodType> };
+  } = {},
 ): McpServer {
   const server = new McpServer(
     { name: 'fixture', version: '1.0.0' },
@@ -30,13 +34,17 @@ function serverWithEveryKind(
     async () => ({ content: [] }),
   );
   server.registerTool('update_case', { description: 'Change one case' }, async () => ({ content: [] }));
-  server.registerPrompt('triage', { description: 'Walk a failure' }, () => ({ messages: [] }));
+  server.registerPrompt(
+    'triage',
+    { description: 'Walk a failure', argsSchema: overrides.triage?.argsSchema ?? { runId: z.string() } },
+    () => ({ messages: [] }),
+  );
   server.registerResource('cases', 'cases://all', { mimeType: 'text/plain' }, async (uri) => ({
     contents: [{ uri: uri.href, text: '' }],
   }));
   server.registerResource(
     'case',
-    new ResourceTemplate('cases://case/{id}', { list: undefined }),
+    new ResourceTemplate(overrides.caseTemplate?.uriTemplate ?? 'cases://case/{id}', { list: undefined }),
     { mimeType: 'text/plain' },
     async (uri) => ({ contents: [{ uri: uri.href, text: '' }] }),
   );
@@ -131,5 +139,28 @@ describe('recordCapabilities', () => {
     // server rather than defaulting to everyone or to nobody.
     expect(drift.error).toContain('get_case');
     expect(drift.error).toContain('resource:case');
+  });
+
+  it('moves the fingerprint when a resource template widens its URI', async () => {
+    const before = await recordCapabilities(() => serverWithEveryKind());
+    const after = await recordCapabilities(() =>
+      serverWithEveryKind({ caseTemplate: { uriTemplate: 'cases://{anything}' } }),
+    );
+
+    // Same registered name, and it now matches URIs it never used to.
+    expect(after.names).toEqual(before.names);
+    expect(after.fingerprints['resource:case']).not.toBe(before.fingerprints['resource:case']);
+  });
+
+  it('moves the fingerprint when a prompt changes the arguments it takes', async () => {
+    const before = await recordCapabilities(() => serverWithEveryKind());
+    const after = await recordCapabilities(() =>
+      serverWithEveryKind({ triage: { argsSchema: { runId: z.string(), alsoEmail: z.string() } } }),
+    );
+
+    // A prompt is a tool call somebody else composed, so its arguments are as
+    // load-bearing as a tool's input schema.
+    expect(after.names).toEqual(before.names);
+    expect(after.fingerprints['prompt:triage']).not.toBe(before.fingerprints['prompt:triage']);
   });
 });

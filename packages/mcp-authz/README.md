@@ -490,6 +490,43 @@ This needs the hook because the SDK keeps a built server's tool list private, so
 nothing can filter what it never saw. Pass the same map as `permissions` to
 `createMcpFetch` and the boot-time check still covers the roles side.
 
+### `recordCapabilities(factory)` — building that map
+
+The map above has to name every capability the server registers, and nothing
+produced it: you wrote it by hand and it drifted quietly. `mcp-authz/testing`
+reads it off the server instead.
+
+```ts
+import { recordCapabilities, toPermissionsModule } from 'mcp-authz/testing';
+
+const { names, fingerprints } = await recordCapabilities(() => buildServer(TEST_CONFIG));
+
+expect(names).toEqual(Object.keys(PERMISSIONS).sort());
+expect(fingerprints).toMatchSnapshot();
+```
+
+It builds your server, connects a client over an in-memory transport, and lists
+tools, prompts, resources and templates, labelled the way `gate()` labels them.
+Build it **ungated**: a gated server answers per principal, so listing one hands
+you a map missing exactly the capabilities that most need a price.
+
+`toPermissionsModule(record)` renders the starting map as TypeScript source —
+`as const` with the derived permission type — every capability priced
+`TODO:unassigned`, which no role grants, so reconciliation refuses the boot until
+a person has decided what each one costs. Permissions are never guessed from
+`readOnlyHint`: the specification says annotations are hints and that tool-use
+decisions must not be made from them.
+
+`gate()` already refuses to start on a capability with no price, which covers a
+dependency that adds a tool. `fingerprints` covers the one it cannot see — a
+capability that keeps its name while its description, input schema, prompt
+arguments or URI template change underneath. Each digests the whole definition
+as served, so a snapshot turns that into a diff on the pull request. Nothing is
+enforced at boot: a digest in production is a second source of truth, and would
+make a description edit an outage.
+
+`@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
+
 ### Boot-time reconciliation
 
 Pass both `policy` and a server built by `authz`, and startup compares them:

@@ -60,6 +60,7 @@ export default defineConfig({
             { label: 'API reference', slug: 'typescript/api' },
             { label: 'gate(): servers you did not write', slug: 'typescript/gate' },
             { label: 'External entitlements', slug: 'typescript/entitlements' },
+            { label: 'Building the permission map', slug: 'typescript/permission-map' },
             { label: 'CLI', slug: 'typescript/cli' },
           ],
         },
