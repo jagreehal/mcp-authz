@@ -85,6 +85,15 @@ Python [`gate()`](https://jagreehal.github.io/mcp-authz/python/gate/); the
 [FastMCP comparison](packages/mcp-authz/README.md#fastmcp-and-canaccess) covers
 the closest in-process alternative.
 
+### The other catalogue an agent reads
+
+An OpenAPI document is `tools/list` under another name, so
+[`mcp-authz/openapi`](packages/mcp-authz/README.md#mcp-authzopenapi--the-same-bet-on-an-http-api)
+applies the same policy to an HTTP API, keyed on `operationId`. Each caller is
+served the document cut to what they may do, and every request is checked whether
+or not they ever read it. Same policy, same boot-time checks, same audit events,
+so one query covers both surfaces of a product.
+
 ## See it work, without an authorization server
 
 ```bash
@@ -319,6 +328,8 @@ easy to make and quiet when made.
 | [`mcp-authz-gate`](skills/mcp-authz-gate/SKILL.md)                     | Gating a server you did not write               |
 | [`mcp-authz-proxy`](skills/mcp-authz-proxy/SKILL.md)                   | Fronting an upstream reachable only by URL      |
 | [`mcp-authz-permission-map`](skills/mcp-authz-permission-map/SKILL.md) | Recording, pricing and drift-checking the map   |
+| [`mcp-authz-openapi`](skills/mcp-authz-openapi/SKILL.md)               | Gating an HTTP API by `operationId`             |
+| [`mcp-authz-audit`](skills/mcp-authz-audit/SKILL.md)                   | Wiring the audit and access-decision events     |
 
 ## Spec stance (2026-07-28)
 

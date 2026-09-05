@@ -16,11 +16,21 @@ from __future__ import annotations
 
 import functools
 import inspect
+import time
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar, cast
 
 from mcp.server import MCPServer
+from mcp.shared.exceptions import MCPError
 
+from .audit import (
+    AuditErrorSink,
+    AuditEvent,
+    AuditSink,
+    deliver_terminal_audit,
+    new_call_id,
+    now,
+)
 from .policy import Principal
 from .server import ApprovalPredicate, ApprovalSink, request_approval, without_context
 
@@ -35,6 +45,9 @@ def gate(
     approval: Mapping[str, ApprovalPredicate] | None = None,
     on_approval: ApprovalSink | None = None,
     approval_timeout: float = 45.0,
+    on_audit: AuditSink | None = None,
+    on_audit_error: AuditErrorSink | None = None,
+    emitter: str | None = None,
 ) -> MCPServer:
     """Wrap registration so only priced, permitted capabilities stay visible."""
 
@@ -71,28 +84,87 @@ def gate(
         kind: str,
         name: str,
         permission: str,
-        needed: ApprovalPredicate,
+        needed: ApprovalPredicate | None,
     ) -> Callable[..., Any]:
         signature = inspect.signature(function)
 
+        def event(
+            phase: str,
+            call_id: str,
+            started: float | None = None,
+            *,
+            decision: str = "allow",
+            approved_by: str | None = None,
+            error: str | None = None,
+        ) -> AuditEvent:
+            return AuditEvent(
+                call_id=call_id,
+                issuer=principal.issuer,
+                sub=principal.sub,
+                email=principal.email,
+                domain=principal.domain,
+                emitter=emitter,
+                kind=kind,
+                name=name,
+                permission=permission,
+                decision=decision,
+                phase=phase,
+                at=now(),
+                approved_by=approved_by,
+                duration_ms=None if started is None else (time.perf_counter() - started) * 1000,
+                error=error,
+            )
+
         @functools.wraps(function)
         async def guarded(*args: Any, **kwargs: Any) -> Any:
+            call_id = new_call_id()
             bound = signature.bind_partial(*args, **kwargs)
             bound.apply_defaults()
             arguments = without_context(bound.arguments)
             ask = needed(arguments) if callable(needed) else bool(needed)
-            if ask:
-                await request_approval(
-                    on_approval=on_approval,
-                    approval_timeout=approval_timeout,
-                    kind=kind,
-                    name=name,
-                    permission=permission,
-                    arguments=arguments,
-                    principal=principal,
+            if on_audit is not None:
+                # Awaited, and a rejection stops the call: their calls landing in
+                # your log is the only record tying a person to an action when the
+                # server was written by somebody else.
+                await _call_audit(on_audit, event("attempt", call_id))
+            started = time.perf_counter()
+            try:
+                if ask:
+                    await request_approval(
+                        on_approval=on_approval,
+                        approval_timeout=approval_timeout,
+                        kind=kind,
+                        name=name,
+                        permission=permission,
+                        arguments=arguments,
+                        principal=principal,
+                    )
+                result = function(*args, **kwargs)
+                value = await result if inspect.isawaitable(result) else result
+            except MCPError as mcp_error:
+                data = mcp_error.data if isinstance(mcp_error.data, Mapping) else {}
+                refused = data.get("reason") == "approval_refused"
+                by = data.get("by")
+                await deliver_terminal_audit(
+                    on_audit,
+                    on_audit_error,
+                    event(
+                        "refused" if refused else "failure",
+                        call_id,
+                        started,
+                        decision="deny" if refused else "allow",
+                        approved_by=by if isinstance(by, str) else None,
+                        error=str(data.get("detail") or mcp_error.message),
+                    ),
                 )
-            result = function(*args, **kwargs)
-            return await result if inspect.isawaitable(result) else result
+                raise
+            except Exception as error:
+                await deliver_terminal_audit(
+                    on_audit, on_audit_error, event("failure", call_id, started, error=str(error))
+                )
+                raise
+            await deliver_terminal_audit(on_audit, on_audit_error, event("success", call_id, started))
+            return value
 
         return guarded
 
@@ -102,7 +174,7 @@ def gate(
         needed = _approval_for(tool_name, "tool", tool_name)
         wrapped = (
             _guard(fn, kind="tool", name=tool_name, permission=permission, needed=needed)
-            if needed is not None
+            if needed is not None or on_audit is not None
             else fn
         )
         original_add_tool(wrapped, name=name, **options)
@@ -115,7 +187,7 @@ def gate(
         permission = _permission(label, "prompt", prompt_name)
         needed = _approval_for(label, "prompt", prompt_name)
         to_add = prompt
-        if needed is not None and getattr(prompt, "fn", None) is not None:
+        if (needed is not None or on_audit is not None) and getattr(prompt, "fn", None) is not None:
             wrapped_fn = _guard(
                 prompt.fn, kind="prompt", name=prompt_name, permission=permission, needed=needed
             )
@@ -132,7 +204,7 @@ def gate(
             return
         needed = _approval_for(label, "resource", uri)
         to_add = resource
-        if needed is not None and getattr(resource, "fn", None) is not None:
+        if (needed is not None or on_audit is not None) and getattr(resource, "fn", None) is not None:
             wrapped_fn = _guard(
                 resource.fn, kind="resource", name=uri, permission=permission, needed=needed
             )
@@ -156,7 +228,7 @@ def gate(
         def decorate(function: _CallableT) -> _CallableT:
             to_register = (
                 _guard(function, kind="resource", name=uri, permission=permission, needed=needed)
-                if needed is not None
+                if needed is not None or on_audit is not None
                 else function
             )
             # Static resources call self.add_resource; use the original so we
@@ -177,3 +249,9 @@ def gate(
     object.__setattr__(server, "resource", resource)
     return server
 
+
+
+async def _call_audit(sink: AuditSink, event: AuditEvent) -> None:
+    result = sink(event)
+    if inspect.isawaitable(result):
+        await result

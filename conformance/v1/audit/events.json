@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "note": "The two records both packages emit. A log store holds them side by side for years, so the type strings and the JSON keys are an interface: an implementation may add an optional key without moving the version, and may not rename or re-mean one. `domain` and `emitter` are how a reader groups rows by organisation and by deployment; both are absent when there is nothing verified to put in them.",
+  "audit": {
+    "type": "mcp_authz.audit.v1",
+    "keys": [
+      "type",
+      "callId",
+      "issuer",
+      "sub",
+      "email",
+      "domain",
+      "emitter",
+      "kind",
+      "name",
+      "permission",
+      "resource",
+      "decision",
+      "phase",
+      "approvedBy",
+      "at",
+      "durationMs",
+      "error"
+    ],
+    "required": ["type", "callId", "issuer", "sub", "kind", "name", "permission", "decision", "phase", "at"],
+    "kinds": ["tool", "prompt", "resource", "operation"],
+    "phases": ["attempt", "success", "failure", "refused"],
+    "decisions": ["allow", "deny"],
+    "correlation": "callId is the same on both events of one call, and unique across calls."
+  },
+  "decision": {
+    "type": "mcp_authz.decision.v1",
+    "keys": [
+      "type",
+      "issuer",
+      "sub",
+      "email",
+      "domain",
+      "emitter",
+      "decision",
+      "roles",
+      "permissions",
+      "reason",
+      "at"
+    ],
+    "required": ["type", "issuer", "sub", "decision", "roles", "permissions", "at"],
+    "decisions": ["allow", "deny"]
+  }
+}

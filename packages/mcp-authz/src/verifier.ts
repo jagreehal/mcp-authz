@@ -2,6 +2,7 @@ import {
   OAuthError,
   OAuthErrorCode,
   type AuthInfo,
+  type OAuthMetadata,
   type OAuthTokenVerifier,
 } from '@modelcontextprotocol/server';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -121,6 +122,50 @@ export function jwksVerifier(options: VerifierOptions): OAuthTokenVerifier & {
 
     identityOf: identityFromAuth,
   };
+}
+
+/**
+ * The verifier a resource server ends up with, however it was configured.
+ *
+ * Every entry point here faces the same three choices — bring your own
+ * verifier, configure the built-in one, or say nothing and let discovery fill
+ * it in — and has to refuse the same contradiction between the first two. Doing
+ * that in one place is what stops two entry points disagreeing about which
+ * issuer a token is checked against, or which audience it must carry.
+ */
+export function verifierFor(options: {
+  oauthMetadata: OAuthMetadata;
+  resourceServerUrl: URL;
+  verifier?: Partial<VerifierOptions>;
+  tokenVerifier?: OAuthTokenVerifier;
+  identityFromAuth?: (auth: AuthInfo) => Identity;
+}): { tokenVerifier: OAuthTokenVerifier; mapIdentity: (auth: AuthInfo) => Identity } {
+  if (options.tokenVerifier && options.verifier) {
+    throw new Error('Pass either `tokenVerifier` or built-in `verifier` options, not both.');
+  }
+  if (options.tokenVerifier) {
+    return {
+      tokenVerifier: options.tokenVerifier,
+      mapIdentity: options.identityFromAuth ?? identityFromAuth,
+    };
+  }
+  // The SDK types `jwks_uri` loosely, so narrow it rather than trust it.
+  const published =
+    typeof options.oauthMetadata.jwks_uri === 'string' ? options.oauthMetadata.jwks_uri : undefined;
+  const jwksUri = options.verifier?.jwksUri ?? published;
+  if (!jwksUri) {
+    throw new Error(
+      'No JWKS to verify tokens against. Set `verifier.jwksUri`, use a custom ' +
+        '`tokenVerifier`, or use `discoverOAuth(issuer)`, whose metadata carries `jwks_uri`.',
+    );
+  }
+  const builtIn = jwksVerifier({
+    ...options.verifier,
+    jwksUri,
+    issuer: options.verifier?.issuer ?? options.oauthMetadata.issuer,
+    resource: options.verifier?.resource ?? options.resourceServerUrl,
+  });
+  return { tokenVerifier: builtIn, mapIdentity: options.identityFromAuth ?? builtIn.identityOf };
 }
 
 /** Default identity mapper for custom verifiers using `AuthInfo.extra`. */

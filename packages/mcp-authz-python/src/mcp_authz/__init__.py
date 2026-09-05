@@ -1,5 +1,15 @@
 """Authorization for servers built with the official MCP Python SDK."""
 
+from .audit import (
+    AUDIT_EVENT_TYPE,
+    DECISION_EVENT_TYPE,
+    AuditDeliveryFailure,
+    AuditErrorSink,
+    AuditEvent,
+    AuditSink,
+    AuthorizationDecisionEvent,
+    AuthorizationDecisionSink,
+)
 from .gate import gate
 from .identity import Identity
 from .policy import Explanation, MatchedRule, Policy, Principal, define_policy
@@ -19,9 +29,17 @@ from .verifier import JwtVerifier
 __version__ = "0.2.0"
 
 __all__ = [
+    "AUDIT_EVENT_TYPE",
+    "DECISION_EVENT_TYPE",
     "ApprovalDecision",
     "ApprovalRequest",
     "ApprovalSink",
+    "AuditDeliveryFailure",
+    "AuditErrorSink",
+    "AuditEvent",
+    "AuditSink",
+    "AuthorizationDecisionEvent",
+    "AuthorizationDecisionSink",
     "AuthorizedMCPServer",
     "AuthorizationMiddleware",
     "Explanation",

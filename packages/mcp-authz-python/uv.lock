@@ -765,6 +765,7 @@ name = "mcp-authz"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "mcp" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
@@ -784,6 +785,7 @@ dev = [
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.3" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
+    { name = "httpx2", specifier = ">=2.5.0,<3" },
     { name = "mcp", specifier = ">=2.0.0,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.1,<3" },

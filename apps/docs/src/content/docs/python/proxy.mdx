@@ -1,0 +1,79 @@
+---
+title: Proxy mode
+description: An ASGI resource server in front of an MCP server you can only reach by URL.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`AuthorizedMCPServer` needs the tools; `gate` needs the builder that makes them.
+When all you have is an address, `mcp_authz.proxy` is the enforce-only edge.
+
+```python
+from mcp_authz import JwtVerifier
+from mcp_authz.proxy import McpProxy
+
+app = McpProxy(
+    resource_server_url="https://mcp.acme.com/mcp",
+    upstream_url="https://vendor.example.com/mcp",
+    upstream_bearer=lambda: os.environ["VENDOR_TOKEN"],   # or a str
+    policy=policy,
+    token_verifier=JwtVerifier(
+        issuer="https://auth.acme.com",
+        jwks_uri="https://auth.acme.com/.well-known/jwks.json",
+        resource="https://mcp.acme.com/mcp",
+    ),
+    permissions=PERMISSIONS,      # {"get_case": "cases:read", "resource:cases": "cases:read", ...}
+    resource_uris=RESOURCE_URIS,  # {"resource:cases": "cases://all", ...}
+    authorization_servers=["https://auth.acme.com"],
+    emitter="cases-proxy",
+    on_decision=lambda event: log.warning("access", extra=event.to_dict()),
+)
+```
+
+An ASGI app: run it under uvicorn, or mount it beside whatever already serves
+your other routes.
+
+## It is stricter than the in-process seams
+
+Nothing downstream re-checks anything. The upstream is reached with one service
+credential that outranks every caller, so this fails closed three ways the
+embedded modes do not have to:
+
+- **Routing headers that disagree with the body** are refused, not forwarded.
+  One of the two is lying about what it does, and neither answer can be trusted
+  over the other. A request with no routing headers is authorized from the
+  JSON-RPC body, which is what the upstream will act on.
+- **An invocation the map does not price** is refused, so a tool the upstream
+  added after the map was written inherits nothing.
+- **A catalogue it cannot read** — wrong content type, over the byte cap,
+  unparseable — is withheld with a 502. A listing served unfiltered hands every
+  caller the map.
+
+The caller's `Authorization` and `Cookie` stay at the edge, along with the
+hop-by-hop headers and the ones the `Connection` header names. `/health` reports
+counts, never the upstream address.
+
+## Listings are filtered on the way back
+
+Over JSON, and over SSE event by event as it arrives rather than buffered: the
+body is an upstream's to size, and holding it whole would let that upstream
+decide how much memory this process spends. `max_request_bytes` (default 1 MiB)
+bounds a single message in either direction.
+
+## Resources are priced by URI
+
+A `resources/list` names a resource; a `resources/read` carries a URI. The
+permission map is keyed by label, so `resource_uris` maps each priced
+`resource:` label to the URI or template it answers on, and construction fails
+if one has none rather than advertising a resource it would then refuse to read.
+
+Where several templates cover one URI, every one of their permissions must be
+satisfied. Which registration the upstream routes a URI to is its business, not
+something to guess from the order of a map.
+
+<Aside type="note">
+
+Per-capability scope step-up is npm-only, here as elsewhere in the Python
+package. The proxy enforces permissions, not step-up.
+
+</Aside>

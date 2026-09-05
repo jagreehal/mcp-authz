@@ -37,6 +37,8 @@ import {
 export type GateOptions = {
   /** Same event as `authz`, for tools this package did not define. */
   onAudit?: AuditSink;
+  /** Names this deployment on every event it emits. See `ServerOptions`. */
+  emitter?: string;
   /** Receives a failed terminal audit write without changing the completed action's result. */
   onAuditError?: AuditErrorSink;
   /**
@@ -107,6 +109,7 @@ export function gate<P extends string>(
             onApproval: options.onApproval,
             approvalTimeoutMs: options.approvalTimeoutMs ?? 45_000,
             needsApproval: approvalPredicate(approval),
+            ...(options.emitter ? { emitter: options.emitter } : {}),
           },
         );
         const inner = handler as (...called: unknown[]) => unknown;

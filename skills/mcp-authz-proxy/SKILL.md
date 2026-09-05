@@ -132,5 +132,9 @@ three and re-fetches signing keys.
 
 Source: apps/proxy-example/src/worker.ts
 
+Python: `mcp_authz.proxy.McpProxy` is the same edge as an ASGI app, with the
+same strictness rules. Scope step-up stays npm-only.
+
 See also: mcp-authz-permission-map/SKILL.md — recording an upstream you cannot read
 See also: mcp-authz-gate/SKILL.md — cheaper, when a wrap hook exists
+See also: mcp-authz-audit/SKILL.md — the decisions a proxy emits

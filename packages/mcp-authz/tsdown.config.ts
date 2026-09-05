@@ -10,6 +10,7 @@ export default defineConfig({
     cli: 'src/cli.ts',
     testing: 'src/testing.ts',
     proxy: 'src/proxy.ts',
+    openapi: 'src/openapi.ts',
   },
   format: ['esm'],
   dts: true,

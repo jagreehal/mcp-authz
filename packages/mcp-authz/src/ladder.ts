@@ -25,22 +25,10 @@ import {
 } from '@modelcontextprotocol/server';
 import { AccessDeniedError } from './identity';
 import type { Principal } from './policy';
+import { emitDecision, policyDenied, principalLabel, type AuthorizationDecisionSink } from './decision';
 import { classifyScopedRequest, routeFromBody, type TrustedMcpRoute } from './routing';
 import { scopesForCapability, type CapabilityScopeMap } from './scopes';
 import { readCappedBody } from './upstream';
-
-export type AuthorizationDecisionEvent = {
-  issuer: string;
-  sub: string;
-  email?: string;
-  decision: 'allow' | 'deny';
-  roles: readonly string[];
-  permissions: readonly string[];
-  reason?: string;
-  at: string;
-};
-
-export type AuthorizationDecisionSink = (event: AuthorizationDecisionEvent) => unknown | Promise<unknown>;
 
 export type ScopedPreflight = {
   body: unknown;
@@ -61,13 +49,6 @@ export type ScopedGateResult = { ok: true; preflight?: ScopedPreflight } | { ok:
 /** Bare name for a tool, `prompt:`/`resource:` prefixed for the rest — same as `gate()`. */
 export function capabilityLabel(kind: 'tool' | 'prompt' | 'resource', name: string): string {
   return kind === 'tool' ? name : `${kind}:${name}`;
-}
-
-export function policyDenied(error: AccessDeniedError): Response {
-  return Response.json(
-    { error: 'forbidden', reason: 'policy_denied', error_description: error.message },
-    { status: 403 },
-  );
 }
 
 export function permissionForRoute(
@@ -163,6 +144,8 @@ export async function runScopedGate<P extends string>(options: {
   scopesForRequest?: (request: Request, route: TrustedMcpRoute) => string[];
   resolvePermission: (route: TrustedMcpRoute) => string | undefined;
   onDecision?: AuthorizationDecisionSink;
+  /** Names this deployment on the decisions this rung emits. */
+  emitter?: string;
   resourceMetadataUrl: string;
 }): Promise<ScopedGateResult> {
   const {
@@ -179,6 +162,7 @@ export async function runScopedGate<P extends string>(options: {
     scopesForRequest,
     resolvePermission,
     onDecision,
+    emitter,
     resourceMetadataUrl,
   } = options;
 
@@ -219,7 +203,7 @@ export async function runScopedGate<P extends string>(options: {
   // here, so this rung is skipped rather than crashed through.
   const routePermission = preflight ? resolvePermission(preflight.route) : undefined;
   if (routePermission && principal && !principal.can(routePermission as P)) {
-    await emitDecision(onDecision, principal, 'deny', 'policy_denied');
+    await emitDecision(onDecision, principal, 'deny', 'policy_denied', emitter);
     return {
       ok: false,
       response: policyDenied(
@@ -308,29 +292,6 @@ export async function preflightScopedRequest(
   return { body, route, headersValidated: true };
 }
 
-export async function emitDecision<P extends string>(
-  sink: AuthorizationDecisionSink | undefined,
-  principal: Principal<P> | undefined,
-  decision: 'allow' | 'deny',
-  reason?: string,
-): Promise<void> {
-  if (!principal) return;
-  await sink?.({
-    issuer: principal.issuer,
-    sub: principal.sub,
-    email: principal.email,
-    decision,
-    roles: principal.roles,
-    permissions: principal.permissions,
-    ...(reason ? { reason } : {}),
-    at: new Date().toISOString(),
-  });
-}
-
-export function principalLabel(principal: Pick<Principal, 'issuer' | 'sub' | 'email'>): string {
-  return principal.email ?? `${principal.issuer}#${principal.sub}`;
-}
-
 function requestId(body: unknown): string | number | null {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
   const id = (body as { id?: unknown }).id;
@@ -362,3 +323,11 @@ async function readCapped(request: Request, maxBytes: number): Promise<string | 
   if (Number.isFinite(declared) && declared > maxBytes) return undefined;
   return readCappedBody(request.clone().body, maxBytes);
 }
+
+export {
+  emitDecision,
+  policyDenied,
+  principalLabel,
+  type AuthorizationDecisionEvent,
+  type AuthorizationDecisionSink,
+} from './decision';

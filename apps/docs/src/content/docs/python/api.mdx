@@ -107,6 +107,34 @@ def list_cases() -> list[dict[str, str]]:
 Calling it outside a request raises `RuntimeError`. The field table is in
 [Capabilities](/mcp-authz/concepts/capabilities/#inside-the-handler).
 
+## Audit and decisions
+
+```python
+server = AuthorizedMCPServer(
+    "cases",
+    ...,
+    emitter="cases-prod",
+    on_audit=lambda event: log.info("audit", extra=event.to_dict()),
+    on_audit_error=lambda failure: queue.put(failure.event.to_dict()),
+    on_decision=lambda event: log.warning("access", extra=event.to_dict()),
+)
+```
+
+`gate` takes `on_audit`, `on_audit_error` and `emitter` too, which is the only
+record tying a person to an action when somebody else wrote the tools.
+`event.to_dict()` is the wire form and emits the same JSON keys as the
+TypeScript package. Full behaviour in
+[Audit and decisions](/mcp-authz/concepts/audit/).
+
+## Beyond the MCP server
+
+| Import                                            | What it gates                           |
+| ------------------------------------------------- | --------------------------------------- |
+| [`mcp_authz.proxy`](/mcp-authz/python/proxy/)     | An MCP server you can only reach by URL |
+| [`mcp_authz.openapi`](/mcp-authz/python/openapi/) | An HTTP API, keyed on `operationId`     |
+
+Both are ASGI, both take the same `policy`, and both emit the same events.
+
 ## Human approval
 
 ```python
@@ -127,8 +155,14 @@ reconciles a policy from a terminal. There is no Python equivalent, and there
 may never need to be: it reads a JSON policy file, so it already works on yours.
 
 Per-capability OAuth scope step-up is npm-only too, because the official Python
-SDK exposes only global HTTP scope requirements. See
+SDK exposes only global HTTP scope requirements — including inside
+`mcp_authz.proxy`, which enforces permissions rather than step-up. See
 [Scopes and step-up](/mcp-authz/concepts/scopes/#python-has-one-axis-for-now).
 
-Policy decisions stay identical across the two languages, which is what the
+`record_capabilities`, which reads a permission map off a running MCP server, is
+npm-only for now. `record_operations` covers the OpenAPI half here; for an MCP
+upstream, list it once with `mcp.client.Client` and price what it returns.
+
+Policy decisions, audit events and access decisions stay identical across the
+two languages, which is what the
 [conformance fixtures](/mcp-authz/reference/conformance/) pin.

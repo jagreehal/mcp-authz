@@ -1,0 +1,73 @@
+---
+title: OpenAPI mode
+description: ASGI middleware that applies the same policy and audit trail to an HTTP API.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`mcp_authz.openapi` gates an HTTP API the way `gate` gates an MCP server: the
+served OpenAPI document is cut to the caller, and the request is checked whether
+or not they ever read it.
+
+```python
+from mcp_authz import JwtVerifier
+from mcp_authz.openapi import OpenApiAuthorizationMiddleware, record_operations, to_permissions_module
+
+app = OpenApiAuthorizationMiddleware(
+    api,                       # any ASGI app: FastAPI, Starlette, Litestar, Django
+    spec=spec,
+    permissions=PERMISSIONS,   # {"getCase": "cases:read", "deleteCase": "cases:delete", ...}
+    policy=policy,
+    token_verifier=JwtVerifier(
+        issuer="https://auth.acme.com",
+        jwks_uri="https://auth.acme.com/.well-known/jwks.json",
+        resource="https://api.acme.com",
+    ),
+    resource_server_url="https://api.acme.com",
+    authorization_servers=["https://auth.acme.com"],
+    emitter="cases-api",
+    on_audit=lambda event: log.info("audit", extra=event.to_dict()),
+)
+```
+
+It is ASGI middleware rather than a framework plugin, so the API underneath
+keeps whatever it already uses.
+
+## Build the map from the document
+
+```python
+print(to_permissions_module(record_operations(spec)))
+```
+
+Every operation is priced `TODO:unassigned`, which no role grants, so
+construction fails until a person has decided what each one costs. An operation
+with no `operationId` is refused rather than named for you: a generated fallback
+changes under a path rename, and the map then silently stops matching the route
+it was written for.
+
+## What it refuses
+
+- **A route the document does not describe**, with a 404 that says so. Routes
+  you deliberately keep out of the spec belong outside this middleware rather
+  than behind it.
+- **An operation the map does not price**, at construction.
+- **A map entry naming an operation the document no longer has**, at
+  construction.
+- **A permission no role grants**, at construction.
+
+<Aside type="note">
+
+`/.well-known/oauth-protected-resource` is served unauthenticated, because that
+is how a client discovers which authorization server to go to — which it needs
+before it has a token. `/openapi.json` is not: it is a different document per
+person.
+
+</Aside>
+
+## Audit
+
+Events are the ones described in [Audit and
+decisions](/mcp-authz/concepts/audit/), with `kind="operation"`, the
+`operationId` as `name` and the concrete path as `resource`. The phase follows
+the response status: what an auditor is asking is whether the action happened,
+and over HTTP that is the status rather than whether a coroutine raised.

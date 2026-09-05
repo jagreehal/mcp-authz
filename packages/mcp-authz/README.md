@@ -388,6 +388,67 @@ A handler never checks the permission it declared, because `server` checked it b
 registering. Call `can` when one handler branches on a second permission, such as
 returning extra fields to an admin.
 
+### Where the audit events go
+
+The downstream API sees one service account. These events are the only record
+tying a person to an action, so they are worth sending somewhere a security team
+already looks — their SIEM, their warehouse, the log pipeline behind their
+dashboards. There is no sink to configure and no adapter to install: each hook is
+a function, and the useful ones are one line.
+
+```ts
+onAudit: (event) => logger.info(event),          // structured log → wherever it already ships
+onAudit: (event) => db.insert(auditLog).values(event),
+onDecision: (event) => logger.warn(event),
+```
+
+**Wire both.** `onAudit` sees calls that were permitted. `onDecision` sees the
+refusals — including somebody naming a capability they were never shown, which is
+the single most interesting line in the whole log. They are separate hooks because
+they happen in different places: one wraps the handler, the other answers the
+request before dispatch.
+
+**Keep third-party HTTP off the hot path.** The `attempt` write is awaited, and
+rejecting it stops the call before it runs — that is what makes the trail
+fail-closed, and it means a webhook here puts somebody else's uptime in front of
+your tools. Write locally, ship asynchronously; if you must call out, do it from
+`onAuditError`, or from the terminal events, which cannot change a result that has
+already happened.
+
+**Three fields exist for the reader, not the caller.** `callId` is the same on
+both events of one call and different for every other, so a store can join an
+attempt to its outcome without guessing from timestamps. `domain` is the verified
+Workspace domain — the nearest thing to an organisation this can prove, so key one
+by `(issuer, domain)`. `emitter` names the deployment, and it is the one you have
+to set yourself:
+
+```ts
+server(definitions, { name: 'cases', version: '1.0.0', emitter: 'cases-prod', onAudit });
+createMcpFetch({ ..., emitter: 'cases-prod', onDecision });
+```
+
+Set the same value in every entry point of one deployment, or a reader cannot tell
+that a refusal and a call came from the same place. Left unset the field is absent
+rather than guessed. With those three, "what does this org use, and who used it"
+is a group-by rather than a schema migration.
+
+**Every event says what it is.** `mcp_authz.audit.v1` and
+`mcp_authz.decision.v1` share half their fields and land in the same store, often
+for years, so each carries its own `type`. Query on that rather than on which
+fields happen to be present:
+
+```ts
+onAudit: (event) => sink.write({ ...event, index: event.type }); // event.type is a literal union
+```
+
+A new optional field does not move the `v1`. Changing what an existing field means
+does, because a stored query cannot tell that apart.
+
+There is no dashboard here, and there should not be: it would mean storage,
+retention, its own authentication and a tenancy model, competing with the tool
+your security team already pays for. The events are JSON with a stable shape —
+send them there.
+
 ### Human approval
 
 Some actions want a second person even when the caller is permitted. Declare it
@@ -527,6 +588,55 @@ enforced at boot: a digest in production is a second source of truth, and would
 make a description edit an outage.
 
 `@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
+
+### `mcp-authz/openapi` — the same bet on an HTTP API
+
+An OpenAPI document is the other catalogue an agent reads. A tool that is never
+registered is a tool the model never sees; an operation that is never in the
+served document is an operation the agent never calls. Same move, same policy,
+same audit events, on `operationId` instead of a tool name.
+
+```ts
+import { createOpenApiFetch, recordOperations } from 'mcp-authz/openapi';
+import { toPermissionsModule } from 'mcp-authz/testing';
+
+// The map, generated from the document rather than written by hand.
+// recordOperations(spec).names → toPermissionsModule → PERMISSIONS
+export default createOpenApiFetch({
+  spec,
+  permissions: PERMISSIONS, // { getCase: 'cases:read', deleteCase: 'cases:delete', … }
+  resourceServerUrl: new URL(process.env.API_PUBLIC_URL!),
+  oauthMetadata,
+  policy,
+  onAudit: (event) => logger.info(event),
+  upstream: (request) => app.fetch(request), // your API, unchanged
+});
+```
+
+Dana fetches `/openapi.json` and gets three read operations. Alice fetches the
+same path and gets the write and the delete too. Dana calling `DELETE
+/cases/C1234` anyway is refused with the permission she lacks — the smaller
+document was a context saving, never the boundary.
+
+**Anything the document does not describe is refused**, with a 404 that says so.
+That is the same rule as `gate()`: a capability nobody priced is reachable by
+everyone or by nobody, with no error to read. Routes you deliberately keep out
+of the spec — a health check, static files — belong outside this wrapper rather
+than behind it.
+
+`recordOperations(spec)` needs the document and nothing else: no running server,
+no introspection, and it refuses an operation with no `operationId`, because a
+generated fallback name is a second naming scheme that changes under a path
+rename. Boot fails on an operation the map does not price, on a map entry naming
+an operation the document no longer has, and on a permission no role grants.
+
+Audit events are the ones you already have — `mcp_authz.audit.v1` with
+`kind: 'operation'`, the `operationId` as `name`, and the concrete path as
+`resource` — so one query covers both surfaces of the same product.
+
+This entry point does not import the MCP handler, its route classification or
+its scope step-up: it is its own bundle, ~10 kB plus the policy and verifier
+chunks it shares.
 
 ### `createMcpProxy` — URL-only upstream
 

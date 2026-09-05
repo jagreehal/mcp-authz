@@ -20,6 +20,9 @@ Current fixture groups:
 - `protocol/scopes.json`: scope selection for tools, prompts and resources.
 - `protocol/routing.json`: the trusted 2026 request-routing ladder used before
   per-capability scope enforcement.
+- `audit/events.json`: the two records both packages emit, by type string and
+  JSON key. A deployment running both languages holds them in one store for
+  years, so a renamed key is a broken query rather than a detail.
 
 Each language package owns its implementation and native tooling. The fixtures
 are the seam: both packages read these files rather than copying the behaviour

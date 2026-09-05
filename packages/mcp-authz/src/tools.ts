@@ -46,11 +46,51 @@ export type Capability = 'tool' | 'prompt' | 'resource';
  * type, tagged with whether the identity was verified, rather than widening
  * this one.
  */
+/**
+ * What an audit record can be about.
+ *
+ * Wider than `Capability` because `mcp-authz/openapi` gates HTTP operations
+ * through the same events, and an auditor reading one store wants one shape.
+ * The definition types stay narrow: an MCP tool cannot declare itself an
+ * `operation`, because there is no such thing to declare.
+ */
+export type AuditedKind = Capability | 'operation';
+
 export type AuditEvent = {
+  /**
+   * What this record is, and which shape it is in.
+   *
+   * These events leave the process for somebody's log store and are kept for
+   * years, next to `mcp_authz.decision.v1` records that share half their
+   * fields. A query that tells them apart by guessing which fields are present
+   * breaks the first time either one grows a field.
+   *
+   * A new optional field does not move the `v1`. Changing what an existing
+   * field means does, because a stored query cannot tell that apart.
+   */
+  type: 'mcp_authz.audit.v1';
+  /**
+   * The two events of one call, under one id.
+   *
+   * `attempt` and its terminal event are separate rows in whatever store they
+   * land in, and correlating them by identity and timestamp breaks under
+   * exactly the concurrency that makes the question worth asking.
+   */
+  callId: string;
   issuer: string;
   sub: string;
   email?: string;
-  kind: Capability;
+  /**
+   * Verified Workspace domain, when the AS passes `hd` through.
+   *
+   * The nearest thing to an organisation this library can prove. Key one by
+   * `(issuer, domain)`: an issuer alone is right when each customer brings its
+   * own authorization server, and wrong when one server serves them all.
+   */
+  domain?: string;
+  /** Which deployment emitted this, when you named it. */
+  emitter?: string;
+  kind: AuditedKind;
   /** The registered name, e.g. `update_case`. */
   name: string;
   permission: string;
@@ -64,6 +104,8 @@ export type AuditEvent = {
   durationMs?: number;
   error?: string;
 };
+
+const AUDIT_EVENT_TYPE = 'mcp_authz.audit.v1' as const;
 
 export type AuditSink = (event: AuditEvent) => unknown | Promise<unknown>;
 
@@ -186,6 +228,8 @@ export type Definition<P extends string, C = Principal<P>> = {
 export type Guards<A> = {
   onAudit?: AuditSink;
   onAuditError?: AuditErrorSink;
+  /** Names this deployment on every event it emits. */
+  emitter?: string;
   onApproval?: ApprovalSink;
   approvalTimeoutMs: number;
   /** Present only when this capability declared one. */
@@ -207,10 +251,10 @@ export function guarding<A>(
   audit: ((args: A) => string | undefined) | undefined,
   // Only who they are: `can` is contravariant in the permission union, and this
   // never asks it anything.
-  principal: Pick<Principal, 'issuer' | 'sub' | 'email'>,
+  principal: Pick<Principal, 'issuer' | 'sub' | 'email' | 'domain'>,
   guards: Guards<A>,
 ): <T>(args: A, run: () => T | Promise<T>) => Promise<T> {
-  const { onAudit, onAuditError, onApproval, approvalTimeoutMs, needsApproval } = guards;
+  const { onAudit, onAuditError, onApproval, approvalTimeoutMs, needsApproval, emitter } = guards;
 
   return async (args, run) => {
     const asking = needsApproval?.(args) === true;
@@ -222,13 +266,17 @@ export function guarding<A>(
       issuer: principal.issuer,
       sub: principal.sub,
       email: principal.email,
+      domain: principal.domain,
       kind,
       name,
       permission,
       resource,
     };
+    // One id for both events of this call, made here because this is the only
+    // place that knows they are the same call.
+    const audited = { ...base, callId: crypto.randomUUID(), ...(emitter ? { emitter } : {}) };
     const now = () => new Date().toISOString();
-    await onAudit?.({ ...base, decision: 'allow', phase: 'attempt', at: now() });
+    await onAudit?.({ type: AUDIT_EVENT_TYPE, ...audited, decision: 'allow', phase: 'attempt', at: now() });
 
     let approvedBy: string | undefined;
     if (asking) {
@@ -239,7 +287,7 @@ export function guarding<A>(
       if (decision.approved && (typeof decision.by !== 'string' || decision.by.trim().length === 0)) {
         const reason = 'approval did not name who gave it';
         await deliverTerminalAudit(onAudit, onAuditError, {
-          ...base,
+          ...audited,
           decision: 'deny',
           phase: 'refused',
           at: now(),
@@ -251,7 +299,7 @@ export function guarding<A>(
       if (!decision.approved) {
         const reason = decision.reason ?? 'refused';
         await deliverTerminalAudit(onAudit, onAuditError, {
-          ...base,
+          ...audited,
           decision: 'deny',
           phase: 'refused',
           approvedBy: decision.by,
@@ -267,7 +315,7 @@ export function guarding<A>(
     try {
       const result = await run();
       await deliverTerminalAudit(onAudit, onAuditError, {
-        ...base,
+        ...audited,
         decision: 'allow',
         phase: 'success',
         approvedBy,
@@ -277,7 +325,7 @@ export function guarding<A>(
       return result;
     } catch (error) {
       await deliverTerminalAudit(onAudit, onAuditError, {
-        ...base,
+        ...audited,
         decision: 'allow',
         phase: 'failure',
         approvedBy,
@@ -293,13 +341,15 @@ export function guarding<A>(
 async function deliverTerminalAudit(
   sink: AuditSink | undefined,
   onError: AuditErrorSink | undefined,
-  event: AuditEvent,
+  // Stamped here rather than at each call site: `base` is spread into the
+  // approval request too, which is a question rather than a record.
+  event: Omit<AuditEvent, 'type'>,
 ): Promise<void> {
   try {
-    await sink?.(event);
+    await sink?.({ type: AUDIT_EVENT_TYPE, ...event });
   } catch (error) {
     try {
-      await onError?.({ error, event });
+      await onError?.({ error, event: { type: AUDIT_EVENT_TYPE, ...event } });
     } catch {
       // The handler returned or threw. An observer cannot change that result.
     }
@@ -459,6 +509,14 @@ function resourcesFor<P extends string, C, H>(handlerContext: (context: C, princ
 export type ServerOptions = Implementation & {
   /** Called on every permitted invocation. The one record tying a person to an action. */
   onAudit?: AuditSink;
+  /**
+   * Names this deployment on every event it emits.
+   *
+   * Set the same value in every entry point of one deployment — a dashboard
+   * reading several of them cannot otherwise tell which server a call reached.
+   * Left unset, the field is absent rather than guessed.
+   */
+  emitter?: string;
   /** Receives a failed terminal audit write without changing the completed action's result. */
   onAuditError?: AuditErrorSink;
   /**
@@ -535,6 +593,7 @@ function buildServer<P extends string, C>(
       onAudit,
       onAuditError,
       onApproval,
+      emitter,
       approvalTimeoutMs = 45_000,
       mcp: mcpOptions = {},
       ...serverInfo
@@ -543,7 +602,7 @@ function buildServer<P extends string, C>(
       ...mcpOptions,
       capabilities: { ...mcpOptions.capabilities, ...declared },
     });
-    const guards = { onAudit, onAuditError, onApproval, approvalTimeoutMs };
+    const guards = { onAudit, onAuditError, onApproval, approvalTimeoutMs, emitter };
     for (const definition of enabled) definition.register(server, principal, context, guards);
     return server;
   };

@@ -24,6 +24,10 @@ classifiers = [
 dependencies = [
     "mcp>=2.0.0,<3",
     "PyJWT[crypto]>=2.10.1,<3",
+    # The proxy forwards on the same HTTP client the MCP SDK already uses, so
+    # this adds nothing to an install. Named rather than borrowed: a dependency
+    # you rely on is one you declare.
+    "httpx2>=2.5.0,<3",
 ]
 
 [project.urls]

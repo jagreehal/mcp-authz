@@ -59,6 +59,8 @@ export type McpProxyOptions<P extends string = string> = {
   supportedScopes?: string[];
   capabilityScopes?: CapabilityScopeMap;
   onDecision?: AuthorizationDecisionSink;
+  /** Names this deployment on every event it emits. See `McpFetchOptions`. */
+  emitter?: string;
   healthPath?: string;
   maxRequestBytes?: number;
 };
@@ -76,6 +78,7 @@ export function createMcpProxy<P extends string = string>(
     supportedScopes,
     capabilityScopes,
     resourceUris,
+    emitter,
     healthPath = '/health',
     maxRequestBytes = 1_048_576,
   } = options;
@@ -176,10 +179,10 @@ export function createMcpProxy<P extends string = string>(
         throw error;
       }
       if (principal.permissions.length === 0) {
-        await emitDecision(options.onDecision, principal, 'deny', 'not_permitted');
+        await emitDecision(options.onDecision, principal, 'deny', 'not_permitted', emitter);
         return err(policyDenied(AccessDeniedError.notPermitted(principalLabel(principal))));
       }
-      await emitDecision(options.onDecision, principal, 'allow');
+      await emitDecision(options.onDecision, principal, 'allow', undefined, emitter);
       return ok(principal);
     },
 
@@ -241,6 +244,7 @@ export function createMcpProxy<P extends string = string>(
         resources,
         route,
         onDecision: options.onDecision,
+        ...(emitter ? { emitter } : {}),
       });
       return denied ? err(denied) : ok(undefined);
     },
@@ -342,12 +346,13 @@ async function denyUnpricedInvocation<P extends string>(options: {
   resources: ResourceIndex;
   route?: TrustedMcpRoute;
   onDecision?: AuthorizationDecisionSink;
+  emitter?: string;
 }): Promise<Response | undefined> {
-  const { route, principal } = options;
+  const { route, principal, emitter } = options;
   if (!route || !isInvocationMethod(route.method)) return undefined;
 
   const refuse = async (because: string): Promise<Response> => {
-    await emitDecision(options.onDecision, principal, 'deny', 'policy_denied');
+    await emitDecision(options.onDecision, principal, 'deny', 'policy_denied', emitter);
     return policyDenied(AccessDeniedError.notPermitted(principalLabel(principal), because));
   };
 

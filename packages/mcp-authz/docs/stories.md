@@ -314,6 +314,7 @@ Tags: `approval`, `security`
 - **And** the action ran
 - **And** the audit trail names the approver, not just the caller
   > One service account downstream, two people upstream. The success event is the only place both of them appear.
+- **And** every event says what it is, for a log store that holds both kinds
 
 ### ✅ refuses a runtime approval that does not name the approver
 
@@ -503,6 +504,187 @@ Tags: `resources`, `scopes`
 
 - **Then** the step-up is demanded, even though the key is a template and the request a URI
   > The scope map is keyed by the template as registered; the request carries one concrete URI. An exact-string lookup between the two silently skips the step-up.
+
+## src/openapi.story.test.ts
+
+### An API you already have, gated per person
+
+### ✅ hands each caller a document that stops at what they may do
+
+Tags: `openapi`
+
+- **Given** case-tracker 3.2.0, described by the OpenAPI document it already ships
+
+  > No server is introspected and nothing is generated: the document is the catalogue, and it is already in the repository.
+  > **Operations in the document**
+
+  ```json
+  ["createCase", "deleteCase", "getCase", "listCases", "searchCases"]
+  ```
+
+- **And** a permission map that puts a price on every operation
+
+  > An operation missing from this map fails the boot, so a new route cannot arrive unpriced.
+  > **Permission map**
+
+  ```json
+  {
+    "listCases": "cases:read",
+    "searchCases": "cases:read",
+    "getCase": "cases:read",
+    "createCase": "cases:write",
+    "deleteCase": "cases:delete"
+  }
+  ```
+
+- **When** Dana the reader and Alice the lead each fetch the document
+  **One document, two readers**
+
+  | Caller        | What the document offers                                                        |
+  | ------------- | ------------------------------------------------------------------------------- |
+  | Dana (reader) | GET /cases, GET /cases/search, GET /cases/{id}                                  |
+  | Alice (lead)  | GET /cases, POST /cases, GET /cases/search, GET /cases/{id}, DELETE /cases/{id} |
+
+- **Then** Dana is offered the three reads and nothing else
+- **And** Alice, from the same document, is offered the write and the delete too
+- **And** what the document offers, the API actually serves
+  **GET /cases/C1234**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "served": "GET /cases/C1234"
+  }
+  ```
+
+    </details>
+
+### ✅ refuses the operation an agent never saw, when it names it anyway
+
+Tags: `openapi`, `security`
+
+- **Given** the same reader, and a client that never fetched the document
+  > A smaller document is a context saving, not a boundary. An agent that guessed the path, or a client written against last month`s spec, never asks.
+- **When** she deletes a case anyway
+  **What she got back**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "error": "forbidden",
+    "reason": "policy_denied",
+    "error_description": "dana@acme.com matches no rule in the permission 'cases:delete', so they hold no permissions. Ask an administrator to grant them a role."
+  }
+  ```
+
+    </details>
+
+- **Then** the request is refused, naming the permission she lacks
+
+### ✅ refuses a route the document does not describe
+
+Tags: `openapi`, `security`
+
+- **Given** an endpoint somebody added to the app and left out of the spec
+  > The failure this prevents is the quiet one: a route nobody described is a route nobody priced, and passing it through would make the undescribed case the unguarded case.
+- **When** the lead, who may do everything, calls it
+  **What she got back**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "error": "not_found",
+    "error_description": "POST /cases/C1234/export is not in the document this server gates, so it is refused. Describe it in the OpenAPI document, or serve it outside this wrapper."
+  }
+  ```
+
+    </details>
+
+- **Then** it is refused even for her, and the refusal says what to do about it
+
+### ✅ will not start when the document describes an operation nobody priced
+
+Tags: `boot`, `openapi`
+
+- **Given** a document that grew an operation, and a map that did not
+  > The everyday drift: somebody adds a route, and the map that prices it is a separate file.
+- **When** the server is built
+- **Then** it refuses to boot, naming the operation
+- **And** the map you start from is generated from the document, priced so it cannot be forgotten
+  **toPermissionsModule(recordOperations(spec))**
+
+  ```ts
+  // Generated from a recorded catalogue. Replace every TODO with a real permission.
+
+  export const PERMISSIONS = {
+    closeCase: 'TODO:unassigned',
+    createCase: 'TODO:unassigned',
+    deleteCase: 'TODO:unassigned',
+    getCase: 'TODO:unassigned',
+    listCases: 'TODO:unassigned',
+    searchCases: 'TODO:unassigned',
+  } as const;
+
+  export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+  ```
+
+### ✅ records who called what, in the same event shape as the MCP side
+
+Tags: `audit`, `openapi`
+
+- **Given** an audit sink, and a downstream API that sees one service account
+  > This event is the only place the person appears. The API behind it was called by the gateway, with the gateway`s credential.
+- **When** Alice opens a case
+  **What was recorded**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  [
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "76af69dd-fc6e-4ae9-8aed-c5d9b8f01302",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|alice@acme.com",
+      "email": "alice@acme.com",
+      "kind": "operation",
+      "name": "createCase",
+      "permission": "cases:write",
+      "resource": "/cases",
+      "decision": "allow",
+      "phase": "attempt",
+      "at": "2026-09-05T13:29:53.237Z"
+    },
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "76af69dd-fc6e-4ae9-8aed-c5d9b8f01302",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|alice@acme.com",
+      "email": "alice@acme.com",
+      "kind": "operation",
+      "name": "createCase",
+      "permission": "cases:write",
+      "resource": "/cases",
+      "decision": "allow",
+      "phase": "success",
+      "at": "2026-09-05T13:29:53.239Z",
+      "durationMs": 1.6101660000000493
+    }
+  ]
+  ```
+
+    </details>
+
+- **Then** the trail names her, the operation, and what it cost
+- **And** both events of the call carry one id, which is what joins them later
+  > Correlating an attempt with its outcome by identity and timestamp breaks under exactly the concurrency that makes the question worth asking.
 
 ## src/policy.story.test.ts
 

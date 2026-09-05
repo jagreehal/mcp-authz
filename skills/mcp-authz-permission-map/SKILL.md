@@ -147,3 +147,11 @@ Source: packages/mcp-authz/src/cli.ts
 
 See also: mcp-authz-gate/SKILL.md — the map's main consumer
 See also: mcp-authz-proxy/SKILL.md — needs RESOURCE_URIS as well
+
+## From an OpenAPI document
+
+`recordOperations(spec)` from `mcp-authz/openapi` (`record_operations` in
+Python) builds the same scaffold from a document rather than a running server,
+keyed by `operationId`. Feed it to the same `toPermissionsModule`.
+
+See also: mcp-authz-openapi/SKILL.md — gating the API that document describes

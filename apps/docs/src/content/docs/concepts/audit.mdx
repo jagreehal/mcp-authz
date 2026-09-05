@@ -1,0 +1,105 @@
+---
+title: Audit and decisions
+description: The two records mcp-authz emits, what each field is for, and where to send them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The downstream API sees one service account. These events are the only record
+tying a person to an action, so they are shaped to leave the process: both
+packages emit the same two records, under the same names, with the same JSON
+keys.
+
+| Event                   | Emitted when                      | Hook                         |
+| ----------------------- | --------------------------------- | ---------------------------- |
+| `mcp_authz.audit.v1`    | A permitted capability is called  | `onAudit` / `on_audit`       |
+| `mcp_authz.decision.v1` | A caller is let in or turned away | `onDecision` / `on_decision` |
+
+Wire both. The audit trail sees calls that happened; the decision log sees the
+refusals — including somebody naming a capability they were never shown, which
+is the single most interesting line in the whole log.
+
+## The audit record
+
+`attempt` first, then `success`, `failure` or `refused`.
+
+```json
+{
+  "type": "mcp_authz.audit.v1",
+  "callId": "0f8c…",
+  "issuer": "https://auth.acme.com",
+  "sub": "auth0|alice",
+  "email": "alice@acme.com",
+  "domain": "acme.com",
+  "emitter": "cases-prod",
+  "kind": "tool",
+  "name": "update_case",
+  "permission": "cases:write",
+  "resource": "case:C1234",
+  "decision": "allow",
+  "phase": "success",
+  "approvedBy": "sam@acme.com",
+  "at": "2026-02-01T09:15:04.113Z",
+  "durationMs": 42
+}
+```
+
+`kind` is `tool`, `prompt`, `resource` or `operation` — the last one for HTTP
+operations gated through [`mcp-authz/openapi`](/mcp-authz/typescript/openapi/),
+so one query covers both surfaces of the same product. `resource` is whatever
+the capability's own `audit` callback said the call touched, and the only
+per-call detail recorded: arguments never appear.
+
+`approvedBy` is set when a capability asked for [a second
+person](/mcp-authz/concepts/approval/). The `success` event is the only place
+both the caller and the approver appear.
+
+## Three fields for the reader
+
+`callId` is the same on both events of one call and different for every other
+call, so a store can join an attempt to its outcome. Correlating those rows by
+identity and timestamp instead breaks under exactly the concurrency that makes
+the question worth asking.
+
+`domain` is the verified Workspace domain, from the `hd` claim the authorization
+server passes through. It is the nearest thing to an organisation this can
+prove: key one by `(issuer, domain)`, since an issuer alone is right when each
+customer brings its own authorization server and wrong when one serves them all.
+
+`emitter` names the deployment, and it is the one you set yourself:
+
+```ts
+server(definitions, { name: 'cases', version: '1.0.0', emitter: 'cases-prod', onAudit });
+createMcpFetch({ /* … */ emitter: 'cases-prod', onDecision });
+```
+
+Set the same value in every entry point of one deployment, or a reader cannot
+tell that a refusal and a call came from the same place. Left unset the field is
+absent rather than guessed.
+
+## Delivery rules
+
+The `attempt` write is awaited and its failure stops the call before it runs.
+That is what makes the trail fail-closed, and it is why third-party HTTP does
+not belong on this path: a webhook here puts somebody else's uptime in front of
+your tools. Write locally and ship asynchronously.
+
+A terminal write happens after the action reached its result, so its failure
+cannot change that result. `onAuditError` / `on_audit_error` receives the event
+and the error, for a retry queue or an operator alert.
+
+<Aside type="tip">
+
+The events are JSON with a stable shape. Send them where your security team
+already looks — their SIEM, their warehouse, the pipeline behind their
+dashboards — rather than building a second place to look.
+
+</Aside>
+
+## Versioning
+
+A new optional field does not move the `v1`. Changing what an existing field
+means does, because a stored query cannot tell that apart. The type strings and
+the key sets are pinned by
+[`conformance/v1/audit/events.json`](/mcp-authz/reference/conformance/), which
+both packages read, so a renamed key fails in whichever language renamed it.
