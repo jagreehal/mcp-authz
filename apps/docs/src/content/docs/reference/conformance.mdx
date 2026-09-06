@@ -20,10 +20,15 @@ new version when implementations cannot support both meanings at once.
 | `policy/validation.json`   | Malformed policies that must fail during startup                            |
 | `protocol/scopes.json`     | Scope selection for tools, prompts and resources                            |
 | `protocol/routing.json`    | The trusted 2026 request-routing ladder                                     |
+| `audit/events.json`        | The two event records: type strings, JSON keys, and what may be absent      |
 
 Two implementations can agree on what a caller may do and still disagree about
 why. An index that points at the wrong rule sends an administrator to the wrong
 line, so `explanations.json` pins the derivation as well as the outcome.
+
+A deployment running both languages holds their events side by side in one
+store for years, so the keys are an interface. An implementation may add an
+optional key without moving the version, and may not rename or re-mean one.
 
 ## Why the fixtures are the seam
 

@@ -20,7 +20,7 @@ import {
 import { reconcile, type Policy, type Principal } from './policy';
 import { type TrustedMcpRoute } from './routing';
 import { scopesForCapability, type CapabilityScopeMap, type ToolScopeMap } from './scopes';
-import { identityFromAuth, jwksVerifier, type VerifierOptions } from './verifier';
+import { verifierFor, type VerifierOptions } from './verifier';
 
 /** Where the resolved per-request context rides from the gate to the factory. */
 const CONTEXT_KEY = 'mcp-authz.context';
@@ -105,6 +105,13 @@ export type McpFetchOptions<TContext, P extends string = string> = {
   /** Awaited access-decision sink. A rejection fails closed. */
   onDecision?: AuthorizationDecisionSink;
   /**
+   * Names this deployment on every event it emits.
+   *
+   * Set the same value here and in `server(...)`, or a dashboard reading both
+   * cannot tell that a refusal and a call came from the same place.
+   */
+  emitter?: string;
+  /**
    * After auth: map the verified identity to backend context, or throw
    * `AccessDeniedError` for an actionable 403. Omit to use `policy` alone.
    *
@@ -186,6 +193,7 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
     capabilityScopes,
     policy,
     createServer,
+    emitter,
     contextExtraKey = CONTEXT_KEY,
     healthPath = '/health',
     legacy = 'reject',
@@ -275,7 +283,7 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       );
     }
     if (principal.permissions.length === 0) {
-      await emitDecision(options.onDecision, principal, 'deny', 'not_permitted');
+      await emitDecision(options.onDecision, principal, 'deny', 'not_permitted', emitter);
       throw AccessDeniedError.notPermitted(principalLabel(principal));
     }
     return principal;
@@ -288,43 +296,23 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
     if (!policy && !options.authorize) return enrich!(identity, undefined as never);
     try {
       const context = enrich ? await enrich(identity, principal as never) : (principal as TContext);
-      await emitDecision(options.onDecision, principal!, 'allow');
+      await emitDecision(options.onDecision, principal!, 'allow', undefined, emitter);
       return context;
     } catch (error) {
       if (error instanceof AccessDeniedError) {
-        await emitDecision(options.onDecision, principal!, 'deny', error.reason);
+        await emitDecision(options.onDecision, principal!, 'deny', error.reason, emitter);
       }
       throw error;
     }
   };
 
-  if (options.tokenVerifier && options.verifier) {
-    throw new Error('Pass either `tokenVerifier` or built-in `verifier` options, not both.');
-  }
-  let tokenVerifier: OAuthTokenVerifier;
-  let mapIdentity: (auth: AuthInfo) => Identity;
-  if (options.tokenVerifier) {
-    tokenVerifier = options.tokenVerifier;
-    mapIdentity = options.identityFromAuth ?? identityFromAuth;
-  } else {
-    // The SDK types `jwks_uri` loosely, so narrow it rather than trust it.
-    const published = typeof oauthMetadata.jwks_uri === 'string' ? oauthMetadata.jwks_uri : undefined;
-    const jwksUri = options.verifier?.jwksUri ?? published;
-    if (!jwksUri) {
-      throw new Error(
-        'No JWKS to verify tokens against. Set `verifier.jwksUri`, use a custom ' +
-          '`tokenVerifier`, or use `discoverOAuth(issuer)`, whose metadata carries `jwks_uri`.',
-      );
-    }
-    const builtIn = jwksVerifier({
-      ...options.verifier,
-      jwksUri,
-      issuer: options.verifier?.issuer ?? oauthMetadata.issuer,
-      resource: options.verifier?.resource ?? resourceServerUrl,
-    });
-    tokenVerifier = builtIn;
-    mapIdentity = options.identityFromAuth ?? builtIn.identityOf;
-  }
+  const { tokenVerifier, mapIdentity } = verifierFor({
+    oauthMetadata,
+    resourceServerUrl,
+    ...(options.verifier ? { verifier: options.verifier } : {}),
+    ...(options.tokenVerifier ? { tokenVerifier: options.tokenVerifier } : {}),
+    ...(options.identityFromAuth ? { identityFromAuth: options.identityFromAuth } : {}),
+  });
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
   const metadataOptions = { oauthMetadata, resourceServerUrl, scopesSupported: advertisedScopes };
@@ -415,6 +403,7 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       resolvePermission: (route) =>
         permissionForRoute(createServer.permissionForRoute, createServer.routePermissions, route),
       onDecision: options.onDecision,
+      ...(emitter ? { emitter } : {}),
       resourceMetadataUrl,
     });
     if (!gateResult.ok) return gateResult.response;

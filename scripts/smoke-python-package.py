@@ -28,8 +28,12 @@ def main() -> None:
         run(
             str(python),
             "-c",
-            "from mcp_authz import AuthorizedMCPServer, JwtVerifier, define_policy; "
-            "assert callable(define_policy) and AuthorizedMCPServer and JwtVerifier",
+            "from mcp_authz import AuditEvent, AuthorizedMCPServer, JwtVerifier, define_policy; "
+            "from mcp_authz.openapi import OpenApiAuthorizationMiddleware, record_operations; "
+            "from mcp_authz.proxy import McpProxy; "
+            "assert callable(define_policy) and AuthorizedMCPServer and JwtVerifier; "
+            "assert AuditEvent and OpenApiAuthorizationMiddleware and callable(record_operations); "
+            "assert McpProxy",
         )
 
 

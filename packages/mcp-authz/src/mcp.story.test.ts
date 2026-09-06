@@ -270,7 +270,13 @@ describe('Connecting Claude through Google', () => {
 
     expect(response.status).toBe(200);
     expect(result.result.content[0]?.text).toBe('acme');
-    expect(decisions).toContainEqual(expect.objectContaining({ decision: 'allow', email: 'dana@acme.com' }));
+    expect(decisions).toContainEqual(
+      expect.objectContaining({
+        type: 'mcp_authz.decision.v1',
+        decision: 'allow',
+        email: 'dana@acme.com',
+      }),
+    );
   });
 
   it('authorizes a verified identity that carries no email at all', async () => {
@@ -721,6 +727,9 @@ describe('Asking a person before a permitted action runs', () => {
     );
     expect(audit.map((event) => event.phase)).toEqual(['attempt', 'success']);
     expect(audit.at(-1)).toMatchObject({ email: 'alice@acme.com', approvedBy: 'sam@acme.com' });
+
+    story.and('every event says what it is, for a log store that holds both kinds');
+    expect(audit.map((event) => event.type)).toEqual(['mcp_authz.audit.v1', 'mcp_authz.audit.v1']);
   });
 
   it('returns a completed action when the terminal audit write fails', async () => {

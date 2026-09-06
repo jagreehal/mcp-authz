@@ -286,6 +286,161 @@ outlives the request, keep the same seam: write a pending row from
 that polls it. The store lives in your application, and this stays something you
 install rather than something you run.
 
+## Where the audit events go
+
+The downstream API sees one service account. These events are the only record
+tying a person to an action, so they are worth sending somewhere a security team
+already looks. There is no sink to configure and no adapter to install: each
+hook is a callable, sync or async, and the useful ones are one line.
+
+```python
+server = AuthorizedMCPServer(
+    "cases",
+    policy=policy,
+    token_verifier=verifier,
+    auth=auth,
+    on_audit=lambda event: log.info("audit", extra=event.to_dict()),
+    on_decision=lambda event: log.warning("access", extra=event.to_dict()),
+)
+```
+
+**Wire both.** `on_audit` sees calls that were permitted: `attempt`, then
+`success`, `failure` or `refused`, with identity, capability, permission,
+timestamp and duration. `on_decision` sees the refusals — including somebody
+naming a capability they were never shown, which is the single most interesting
+line in the whole log.
+
+**Keep third-party HTTP off the hot path.** The `attempt` write is awaited, and
+its failure stops the call before it runs — that is what makes the trail
+fail-closed, and it means a webhook here puts somebody else's uptime in front of
+your tools. Write locally, ship asynchronously. A terminal write happens after
+the action reached its result, so its failure cannot change that result; set
+`on_audit_error` to send the event and the error to your retry queue.
+
+`gate` takes `on_audit` and `on_audit_error` too, which is the only record tying
+a person to an action when the tools were written by somebody else.
+
+**Three fields exist for the reader, not the caller.** `call_id` is the same on
+both events of one call and different for every other, so a store can join an
+attempt to its outcome without guessing from timestamps. `domain` is the
+verified Workspace domain — the nearest thing to an organisation this can prove,
+so key one by `(issuer, domain)`. `emitter` names the deployment, and it is
+the one you have to set yourself:
+
+```python
+AuthorizedMCPServer("cases", ..., emitter="cases-prod", on_audit=..., on_decision=...)
+McpProxy(..., emitter="cases-prod", on_decision=...)
+```
+
+Set the same value in every entry point of one deployment, or a reader cannot
+tell that a refusal and a call came from the same place. Left unset the field is
+absent rather than guessed. With those three, "what does this org use, and who
+used it" is a group-by rather than a schema migration.
+
+**Every event says what it is.** `mcp_authz.audit.v1` and `mcp_authz.decision.v1`
+share half their fields and land in the same store, often for years, so each
+carries its own `type`. `event.to_dict()` is the wire form, and it emits the
+same JSON keys as the TypeScript package — one query covers a deployment running
+both. A [conformance fixture](https://github.com/jagreehal/mcp-authz/tree/main/conformance/v1/audit)
+pins those keys in both languages. A new optional field does not move the `v1`;
+changing what an existing field means does.
+
+## `mcp_authz.openapi` — the same bet on an HTTP API
+
+An OpenAPI document is the other catalogue an agent reads. A tool that is never
+registered is a tool the model never sees; an operation that is never in the
+served document is an operation the agent never calls. Same policy, same audit
+events, keyed on `operationId` instead of a tool name.
+
+```python
+from mcp_authz.openapi import OpenApiAuthorizationMiddleware, record_operations, to_permissions_module
+
+# The map, generated from the document rather than written by hand:
+# print(to_permissions_module(record_operations(spec)))
+
+app = OpenApiAuthorizationMiddleware(
+    api,                       # any ASGI app: FastAPI, Starlette, Litestar, Django
+    spec=spec,
+    permissions=PERMISSIONS,   # {"getCase": "cases:read", "deleteCase": "cases:delete", ...}
+    policy=policy,
+    token_verifier=JwtVerifier(issuer=..., jwks_uri=..., resource="https://api.acme.com"),
+    resource_server_url="https://api.acme.com",
+    authorization_servers=["https://auth.acme.com"],
+    on_audit=lambda event: log.info("audit", extra=event.to_dict()),
+)
+```
+
+Dana fetches `/openapi.json` and gets three read operations. Alice fetches the
+same path and gets the write and the delete too. Dana calling `DELETE
+/cases/C1234` anyway is refused with the permission she lacks — the smaller
+document was a context saving, never the boundary.
+
+**Anything the document does not describe is refused**, with a 404 that says so.
+That is the same rule as `gate`: a capability nobody priced is reachable by
+everyone or by nobody, with no error to read. Routes you deliberately keep out of
+the spec — a health check, static files — belong outside this wrapper rather than
+behind it.
+
+`record_operations(spec)` needs the document and nothing else: no running server,
+no introspection, and it refuses an operation with no `operationId`, because a
+generated fallback name is a second naming scheme that changes under a path
+rename. Construction fails on an operation the map does not price, on a map entry
+naming an operation the document no longer has, and on a permission no role
+grants.
+
+Audit events are the ones above, with `kind="operation"`, the `operationId` as
+`name` and the concrete path as `resource`, so one query covers both surfaces of
+the same product.
+
+## `mcp_authz.proxy` — a server you can only reach by URL
+
+`AuthorizedMCPServer` needs the tools; `gate` needs the builder that makes them.
+When all you have is an address, there is no in-process seam left, and
+enforcement happens at the edge:
+
+```python
+from mcp_authz.proxy import McpProxy
+
+app = McpProxy(
+    resource_server_url="https://mcp.acme.com/mcp",
+    upstream_url="https://vendor.example.com/mcp",
+    upstream_bearer=lambda: os.environ["VENDOR_TOKEN"],   # or a str
+    policy=policy,
+    token_verifier=JwtVerifier(issuer=..., jwks_uri=..., resource="https://mcp.acme.com/mcp"),
+    permissions=PERMISSIONS,      # {"get_case": "cases:read", "resource:cases": "cases:read", ...}
+    resource_uris=RESOURCE_URIS,  # {"resource:cases": "cases://all", ...}
+    authorization_servers=["https://auth.acme.com"],
+    on_decision=lambda event: log.warning("access", extra=event.to_dict()),
+)
+```
+
+It is an ASGI app: run it under uvicorn, or mount it in whatever already serves
+your other routes.
+
+**Nothing downstream re-checks anything.** The upstream is reached with one
+service credential that outranks every caller, so this fails closed three ways
+the in-process seams do not have to:
+
+- a request whose routing headers disagree with its body is refused, not
+  forwarded — one of the two is lying about what it does, and neither answer can
+  be trusted over the other
+- an invocation the permission map does not price is refused, so a tool the
+  upstream added after the map was written inherits nothing
+- a catalogue this cannot read — wrong content type, over the byte cap,
+  unparseable — is withheld with a `502` rather than passed through, because a
+  listing served unfiltered hands every caller the map
+
+Listings are filtered on the way back, over JSON and over SSE, event by event as
+they arrive rather than buffered: the body is an upstream's to size, and holding
+it whole would let that upstream decide how much memory this process spends.
+
+`resources/read` names a URI on the wire and a label in the permission map, so
+`resource_uris` maps each priced `resource:` label to the URI or template it
+answers on. Where several templates cover one URI, every one of their permissions
+must be satisfied — which registration the upstream routes a URI to is its
+business, not something to guess from the order of a map. A priced resource with
+no URI fails at construction rather than at the first read.
+
 ## Boot-time reconciliation
 
 Decorating a capability with a permission that no role grants raises
@@ -396,8 +551,14 @@ reconciles a policy from a terminal. There is no Python equivalent, and there
 may never need to be: it reads a JSON policy file, so it already works on yours.
 
 Per-capability OAuth scope step-up is npm-only too, for the reason given under
-[Scopes](#scopes). Policy decisions themselves stay identical across the two
-languages, which is what the conformance fixtures pin.
+[Scopes](#scopes) — including inside `mcp_authz.proxy`, which enforces
+permissions but not step-up. So is `record_capabilities`, which reads a
+permission map off a running MCP server; `record_operations` covers the OpenAPI
+half of that here, and until the MCP half lands you list an upstream once with
+`mcp.client.Client` and price what it returns.
+
+Policy decisions, audit events and access decisions stay identical across the
+two languages, which is what the conformance fixtures pin.
 
 ## Conformance
 

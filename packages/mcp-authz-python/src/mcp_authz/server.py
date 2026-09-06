@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import functools
 import inspect
+import time
 import warnings
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,16 @@ from mcp.server.context import CallNext, HandlerResult, ServerMiddleware, Server
 from mcp.server.mcpserver import Context
 from mcp.shared.exceptions import MCPError
 
+from .audit import (
+    AuditErrorSink,
+    AuditEvent,
+    AuditSink,
+    AuthorizationDecisionSink,
+    deliver_terminal_audit,
+    emit_decision,
+    new_call_id,
+    now,
+)
 from .identity import Identity
 from .policy import Policy, Principal
 
@@ -148,6 +159,10 @@ class AuthorizationMiddleware:
         approvals: Mapping[tuple[str, str], bool] | None = None,
         on_approval: ApprovalSink | None = None,
         approval_timeout: float = 45.0,
+        on_audit: AuditSink | None = None,
+        on_audit_error: AuditErrorSink | None = None,
+        on_decision: AuthorizationDecisionSink | None = None,
+        emitter: str | None = None,
     ) -> None:
         self.policy = policy
         self.permissions = permissions
@@ -155,16 +170,22 @@ class AuthorizationMiddleware:
         self.approvals = approvals if approvals is not None else {}
         self.on_approval = on_approval
         self.approval_timeout = approval_timeout
+        self.on_audit = on_audit
+        self.on_audit_error = on_audit_error
+        self.on_decision = on_decision
+        self.emitter = emitter
 
     async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
-        principal = self._principal()
+        principal = await self._principal()
         capability = _requested_capability(ctx.method, ctx.params)
+        permission: str | None = None
         if capability is not None:
             permission = self._permission(ctx.method, capability)
             if permission is None:
                 # Deny by default, loudly. A capability registered straight on
                 # `.mcp`, bypassing the decorators that price it, is otherwise
                 # reachable by everyone with nothing in the logs to read.
+                await emit_decision(self.on_decision, principal, "deny", "undeclared_capability", self.emitter)
                 raise MCPError(
                     _PERMISSION_DENIED,
                     "Permission denied",
@@ -175,6 +196,7 @@ class AuthorizationMiddleware:
                     },
                 )
             if not principal.can(permission):
+                await emit_decision(self.on_decision, principal, "deny", "policy_denied", self.emitter)
                 raise MCPError(
                     _PERMISSION_DENIED,
                     "Permission denied",
@@ -185,13 +207,15 @@ class AuthorizationMiddleware:
                         "capability": capability,
                     },
                 )
+        await emit_decision(self.on_decision, principal, "allow", None, self.emitter)
         reset_principal = _principal_context.set(principal)
         reset_capability = _capability_context.set((ctx.method, capability) if capability is not None else None)
         try:
-            if capability is not None:
+            if capability is None:
+                result = await call_next(ctx)
+            else:
                 assert permission is not None
-                await self._approve(ctx, capability, permission, principal)
-            result = await call_next(ctx)
+                result = await self._audited(ctx, capability, permission, principal, call_next)
             if isinstance(result, dict):
                 return self._filter_listing(ctx.method, result, principal)
             return result
@@ -199,12 +223,89 @@ class AuthorizationMiddleware:
             _capability_context.reset(reset_capability)
             _principal_context.reset(reset_principal)
 
-    def _principal(self) -> Principal:
+    async def _audited(
+        self,
+        ctx: ServerRequestContext[Any, Any],
+        capability: str,
+        permission: str,
+        principal: Principal,
+        call_next: CallNext,
+    ) -> HandlerResult:
+        """Record the attempt, then whatever became of it.
+
+        The attempt write is awaited and its failure stops the call: an action
+        nobody could record is an action that should not happen. A terminal
+        write happens after the action reached its result, so its failure
+        cannot change that result.
+        """
+
+        if self.on_audit is None:
+            await self._approve(ctx, capability, permission, principal)
+            return await call_next(ctx)
+
+        started = time.perf_counter()
+        call_id = new_call_id()
+
+        def event(
+            phase: str,
+            *,
+            decision: str = "allow",
+            approved_by: str | None = None,
+            error: str | None = None,
+            timed: bool = True,
+        ) -> AuditEvent:
+            return AuditEvent(
+                call_id=call_id,
+                issuer=principal.issuer,
+                sub=principal.sub,
+                email=principal.email,
+                domain=principal.domain,
+                emitter=self.emitter,
+                kind=_KINDS.get(ctx.method, ctx.method),
+                name=capability,
+                permission=permission,
+                decision=decision,
+                phase=phase,
+                at=now(),
+                approved_by=approved_by,
+                duration_ms=(time.perf_counter() - started) * 1000 if timed else None,
+                error=error,
+            )
+
+        await _call_audit(self.on_audit, event("attempt", timed=False))
+        try:
+            await self._approve(ctx, capability, permission, principal)
+            result = await call_next(ctx)
+        except MCPError as mcp_error:
+            data = mcp_error.data if isinstance(mcp_error.data, Mapping) else {}
+            refused = data.get("reason") == "approval_refused"
+            by = data.get("by")
+            await deliver_terminal_audit(
+                self.on_audit,
+                self.on_audit_error,
+                event(
+                    "refused" if refused else "failure",
+                    decision="deny" if refused else "allow",
+                    approved_by=by if isinstance(by, str) else None,
+                    error=str(data.get("detail") or mcp_error.message),
+                ),
+            )
+            raise
+        except Exception as error:
+            await deliver_terminal_audit(
+                self.on_audit, self.on_audit_error, event("failure", error=str(error))
+            )
+            raise
+        await deliver_terminal_audit(self.on_audit, self.on_audit_error, event("success"))
+        return result
+
+    async def _principal(self) -> Principal:
         token = get_access_token()
         if token is None:
             raise MCPError(_PERMISSION_DENIED, "Authentication required")
         principal = self.policy(identity_from_access_token(token))
         if not principal.permissions:
+            await emit_decision(self.on_decision, principal, "deny", "not_permitted", self.emitter)
             # Matching no rule means no permissions, and there is no setting to
             # widen it. Refusing the connection is what makes that legible: the
             # alternative is a session that lists nothing and explains nothing,
@@ -315,6 +416,10 @@ class AuthorizedMCPServer:
         middleware: Sequence[ServerMiddleware[Any]] = (),
         on_approval: ApprovalSink | None = None,
         approval_timeout: float = 45.0,
+        on_audit: AuditSink | None = None,
+        on_audit_error: AuditErrorSink | None = None,
+        on_decision: AuthorizationDecisionSink | None = None,
+        emitter: str | None = None,
         **server_options: Any,
     ) -> None:
         self.permissions: dict[tuple[str, str], str] = {}
@@ -331,6 +436,10 @@ class AuthorizedMCPServer:
             self.approvals,
             on_approval,
             approval_timeout,
+            on_audit,
+            on_audit_error,
+            on_decision,
+            emitter,
         )
         self._authorization = authorization
         self.mcp = MCPServer(
@@ -483,3 +592,11 @@ def _requested_capability(method: str, params: Mapping[str, Any] | None) -> str 
         return None
     value = params.get(field)
     return value if isinstance(value, str) else None
+
+
+async def _call_audit(sink: AuditSink, event: AuditEvent) -> None:
+    """The attempt write, awaited. A rejection stops the call before it runs."""
+
+    result = sink(event)
+    if inspect.isawaitable(result):
+        await result

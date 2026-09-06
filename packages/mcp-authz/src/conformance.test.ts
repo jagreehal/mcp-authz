@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
 import type { Identity } from './identity';
 import { definePolicy, type Policy } from './policy';
+import { emitDecision, type AuthorizationDecisionEvent } from './decision';
 import { classifyScopedRequest } from './routing';
 import { scopesForCapability, scopesFromMcpHeaders, type CapabilityScopeMap } from './scopes';
+import { authz, type AuditEvent } from './tools';
+import { z } from 'zod';
 
 type DecisionFixtures = {
   policy: unknown;
@@ -31,6 +36,17 @@ type ExplanationFixtures = {
 type ValidationFixtures = {
   cases: { name: string; policy: unknown; errorIncludes: string }[];
 };
+
+type EventFixtures = {
+  audit: { type: string; keys: string[]; required: string[]; kinds: string[]; phases: string[] };
+  decision: { type: string; keys: string[]; required: string[] };
+};
+
+/** Keys carried with an undefined value are absent once serialised. */
+const wireKeys = (event: object): string[] =>
+  Object.entries(event)
+    .filter(([, value]) => value !== undefined)
+    .map(([key]) => key);
 
 type ScopeFixtures = {
   baseline: string;
@@ -132,5 +148,80 @@ describe('the cross-language trusted-routing contract', () => {
       expect(route.name).toBe(expected.name);
     }
     if (route.kind === 'reject' && expected.kind === 'reject') expect(route.code).toBe(expected.code);
+  });
+});
+
+describe('the cross-language event contract', () => {
+  const events = fixture<EventFixtures>('audit/events.json');
+
+  it('emits the audit record both packages agreed on', async () => {
+    const seen: AuditEvent[] = [];
+    const { tool, server } = authz(
+      definePolicy({
+        roles: { reader: ['cases:read'] },
+        rules: [{ match: { domain: 'acme.com' }, role: 'reader' }],
+      }),
+    );
+    const createServer = server(
+      [
+        tool(
+          'read_case',
+          {
+            permission: 'cases:read',
+            inputSchema: z.object({ id: z.string() }),
+            audit: ({ id }) => `case:${id}`,
+          },
+          async () => ({ content: [{ type: 'text' as const, text: 'read' }] }),
+        ),
+      ],
+      { name: 'conformance', version: '1.0.0', onAudit: (event) => void seen.push(event) },
+    );
+    const built = createServer({
+      issuer: 'https://auth.example.com',
+      sub: 'user-1',
+      email: 'reader@acme.com',
+      roles: ['reader'],
+      permissions: ['cases:read'],
+      can: () => true,
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await built.connect(serverTransport);
+    const client = new Client({ name: 'conformance', version: '1.0.0' });
+    await client.connect(clientTransport);
+    await client.callTool({ name: 'read_case', arguments: { id: 'C1' } });
+    await client.close();
+
+    const success = seen.at(-1)!;
+    expect(success.type).toBe(events.audit.type);
+    expect(wireKeys(success)).toEqual(expect.arrayContaining(events.audit.required));
+    expect(wireKeys(success).filter((key) => !events.audit.keys.includes(key))).toEqual([]);
+    expect(events.audit.kinds).toContain(success.kind);
+    for (const event of seen) expect(events.audit.phases).toContain(event.phase);
+
+    // One call, two events, one id — which is what a dashboard joins them on.
+    expect(new Set(seen.map((event) => event.callId)).size).toBe(1);
+    expect(success.callId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('emits the decision record both packages agreed on', async () => {
+    const decisions: AuthorizationDecisionEvent[] = [];
+    await emitDecision(
+      (event) => void decisions.push(event),
+      {
+        issuer: 'https://auth.example.com',
+        sub: 'user-1',
+        email: 'reader@acme.com',
+        roles: ['reader'],
+        permissions: ['cases:read'],
+        can: () => true,
+      },
+      'deny',
+      'not_permitted',
+    );
+
+    const decision = decisions[0]!;
+    expect(decision.type).toBe(events.decision.type);
+    expect(wireKeys(decision)).toEqual(expect.arrayContaining(events.decision.required));
+    expect(wireKeys(decision).filter((key) => !events.decision.keys.includes(key))).toEqual([]);
   });
 });

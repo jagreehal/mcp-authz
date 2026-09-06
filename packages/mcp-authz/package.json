@@ -34,6 +34,10 @@
     "./proxy": {
       "types": "./dist/proxy.d.ts",
       "import": "./dist/proxy.js"
+    },
+    "./openapi": {
+      "types": "./dist/openapi.d.ts",
+      "import": "./dist/openapi.js"
     }
   },
   "files": [
@@ -58,7 +62,8 @@
     "oauth",
     "authorization",
     "resource-server",
-    "rbac"
+    "rbac",
+    "openapi"
   ],
   "author": "Jag Reehal <jag@jagreehal.com> (https://jagreehal.com)",
   "license": "MIT",
