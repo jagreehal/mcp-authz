@@ -6,12 +6,13 @@ An OAuth 2.1 **resource server** plus an access policy, as a library you import 
 
 **[Documentation](https://jagreehal.github.io/mcp-authz/)** · [Quick start](https://jagreehal.github.io/mcp-authz/quick-start/) · [Run the example](https://jagreehal.github.io/mcp-authz/run-the-example/)
 
-| Package                                           | Registry | What it is                                                    |
-| ------------------------------------------------- | -------- | ------------------------------------------------------------- |
-| [`mcp-authz`](packages/mcp-authz)                 | npm      | TypeScript library: JWKS, policy, permission-gated tools      |
-| [`mcp-authz`](packages/mcp-authz-python)          | PyPI     | Python library built on the official `mcp` SDK v2             |
-| [`mcp-authz-node-example`](apps/node-example)     | —        | Thin Node.js consumer that wires the library to a demo server |
-| [`mcp-authz-python-example`](apps/python-example) | —        | Thin Python consumer using the official SDK                   |
+| Package                                                 | Registry | What it is                                                    |
+| ------------------------------------------------------- | -------- | ------------------------------------------------------------- |
+| [`mcp-authz`](packages/mcp-authz)                       | npm      | TypeScript library: JWKS, policy, permission-gated tools      |
+| [`mcp-authz`](packages/mcp-authz-python)                | PyPI     | Python library built on the official `mcp` SDK v2             |
+| [`mcp-authz-node-example`](apps/node-example)           | —        | Thin Node.js consumer that wires the library to a demo server |
+| [`mcp-authz-python-example`](apps/python-example)       | —        | Thin Python consumer using the official SDK                   |
+| [`mcp-authz-helpscout-example`](apps/helpscout-example) | —        | Help Scout tools for an org agent that holds a static bearer  |
 
 You bring the authorization server (WorkOS, Stytch, Auth0, …). This package never runs consent, DCR, or PKCE. It verifies tokens whose audience is your public MCP URL, decides what the caller may do, and registers only the tools they may use.
 

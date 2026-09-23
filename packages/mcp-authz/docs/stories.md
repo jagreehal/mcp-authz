@@ -650,7 +650,7 @@ Tags: `audit`, `openapi`
   [
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "76af69dd-fc6e-4ae9-8aed-c5d9b8f01302",
+      "callId": "3b6b7904-a804-4d6f-ac21-62824d43fa84",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|alice@acme.com",
       "email": "alice@acme.com",
@@ -660,11 +660,11 @@ Tags: `audit`, `openapi`
       "resource": "/cases",
       "decision": "allow",
       "phase": "attempt",
-      "at": "2026-09-05T13:29:53.237Z"
+      "at": "2026-09-23T22:15:09.383Z"
     },
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "76af69dd-fc6e-4ae9-8aed-c5d9b8f01302",
+      "callId": "3b6b7904-a804-4d6f-ac21-62824d43fa84",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|alice@acme.com",
       "email": "alice@acme.com",
@@ -674,8 +674,8 @@ Tags: `audit`, `openapi`
       "resource": "/cases",
       "decision": "allow",
       "phase": "success",
-      "at": "2026-09-05T13:29:53.239Z",
-      "durationMs": 1.6101660000000493
+      "at": "2026-09-23T22:15:09.386Z",
+      "durationMs": 2.898416999999995
     }
   ]
   ```
