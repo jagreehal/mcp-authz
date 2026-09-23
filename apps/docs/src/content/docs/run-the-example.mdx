@@ -122,3 +122,25 @@ to see the behaviour before standing up an authorization server.
 
 </TabItem>
 </Tabs>
+
+## An org agent with a static bearer
+
+`apps/helpscout-example` serves Help Scout tools to one org agent, such as
+Claude Tag, that presents a static bearer. You run no authorization server. A
+custom `tokenVerifier` compares the key in constant time, and the policy grants
+`helpscout:read` to the subject it returns.
+
+```bash
+export MCP_PUBLIC_URL=https://mcp.example.com/mcp
+export MCP_BEARER=$(openssl rand -hex 32)
+export HELPSCOUT_DOCS_API_KEY=…
+export HELPSCOUT_APP_ID=…        # optional: Mailbox tools
+export HELPSCOUT_APP_SECRET=…
+
+pnpm --filter mcp-authz-helpscout-example dev   # :8400
+```
+
+Without the Mailbox credentials the server lists the three Docs tools. With
+them it adds four Mailbox tools. The Help Scout keys never leave the process.
+See the
+[example README](https://github.com/jagreehal/mcp-authz/tree/main/apps/helpscout-example).

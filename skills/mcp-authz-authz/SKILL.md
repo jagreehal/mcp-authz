@@ -88,6 +88,38 @@ One vocabulary everywhere — permission maps, scope maps, `recordCapabilities`:
 permission for. A reader's `tools/list` does not mention the write tools, and
 naming one anyway is still refused.
 
+### A caller with no authorization server
+
+An org agent that holds one static bearer needs no OAuth. Pass a `tokenVerifier`
+that compares the key in constant time, and an `identityFromAuth` that returns
+the subject your policy names:
+
+```ts
+createMcpFetch({
+  resourceServerUrl,
+  oauthMetadata, // required by the type, never followed
+  tokenVerifier: {
+    async verifyAccessToken(token) {
+      if (!sameKey(token)) throw new OAuthError(OAuthErrorCode.InvalidToken, 'Invalid bearer token');
+      return { token, clientId: 'agent', scopes: ['mcp'], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
+    },
+  },
+  identityFromAuth: () => ({
+    issuer: resourceServerUrl.origin,
+    sub: 'agent',
+    emailVerified: false,
+    claims: {},
+  }),
+  policy, // rules: [{ match: { sub: 'agent' }, role: 'reader' }]
+  createServer,
+});
+```
+
+The upstream credentials stay in the process. The policy still reconciles at
+boot, so a write tool stays unreachable until a role grants it.
+
+Source: apps/helpscout-example/src/mcp.ts
+
 ### Audit, and asking a person
 
 ```ts
