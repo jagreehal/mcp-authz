@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "mcp-authz": "workspace:*",
-    "@modelcontextprotocol/node": "^2.0.0"
+    "@modelcontextprotocol/node": "^2.1.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
