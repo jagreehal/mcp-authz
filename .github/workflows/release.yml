@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'jagreehal'
+    # Matches the environment on the npm trusted publisher.
+    environment: release
+    permissions:
+      contents: write # version commit, tags, GitHub release
+      pull-requests: write # the "Version Packages" PR
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.4.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm audit --prod --audit-level high
+
+      # `pnpm release` runs quality, the npm smoke test and a clean-tree check
+      # before `changeset publish`.
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          publish-script: pnpm release
+          commit-message: 'chore: release packages'
+          pr-title: 'chore: release packages'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          NPM_CONFIG_PROVENANCE: true

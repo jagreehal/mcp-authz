@@ -272,7 +272,16 @@ describe('An API you already have, gated per person', () => {
     story.when('Alice opens a case');
     const response = await call(api, 'POST', '/cases', await token('alice@acme.com'));
     expect(response.status).toBe(200);
-    story.state({ label: 'What was recorded', value: events });
+    // callId, at and durationMs differ on every run; fixed values keep docs/stories.md stable.
+    story.state({
+      label: 'What was recorded',
+      value: events.map((event) => ({
+        ...event,
+        callId: '<call id>',
+        at: '<timestamp>',
+        ...('durationMs' in event && { durationMs: '<ms>' }),
+      })),
+    });
 
     story.then('the trail names her, the operation, and what it cost');
     expect(events.map((event) => event.phase)).toEqual(['attempt', 'success']);
