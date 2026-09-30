@@ -79,6 +79,17 @@ async function token(email: string, overrides: { audience?: string } = {}) {
     .sign(privateKey);
 }
 
+/** What an agent's own client-credentials token looks like: a subject, and no person behind it. */
+async function agentToken(sub: string) {
+  return new SignJWT({ scope: 'mcp', azp: 'claude-tag', gty: 'client-credentials' })
+    .setProtectedHeader({ alg: 'RS256', kid: 'e2e-key' })
+    .setSubject(sub)
+    .setIssuer(ISSUER)
+    .setAudience(RESOURCE.href)
+    .setExpirationTime('5m')
+    .sign(privateKey);
+}
+
 const POLICY = definePolicy({
   roles: {
     reader: ['cases:read'],
@@ -167,7 +178,13 @@ async function connect(handler: (request: Request) => Promise<Response>, bearer:
  * client from this handler's side. The default is `reject`, which is why the
  * compatibility story below exists.
  */
-function gatedHandler(options: TheirOptions & { legacy?: 'reject' | 'stateless' } = {}) {
+function gatedHandler(
+  options: TheirOptions & {
+    legacy?: 'reject' | 'stateless';
+    requireEmail?: boolean;
+    policy?: typeof POLICY;
+  } = {},
+) {
   return createMcpFetch({
     legacy: options.legacy ?? 'stateless',
     resourceServerUrl: RESOURCE,
@@ -177,8 +194,8 @@ function gatedHandler(options: TheirOptions & { legacy?: 'reject' | 'stateless' 
       token_endpoint: `${ISSUER}/token`,
       response_types_supported: ['code'],
     },
-    verifier: { jwksUri: `${ISSUER}/jwks` },
-    policy: POLICY,
+    verifier: { jwksUri: `${ISSUER}/jwks`, requireEmail: options.requireEmail },
+    policy: options.policy ?? POLICY,
     permissions: new Map(Object.entries(PERMISSIONS)),
     createServer: (principal) =>
       caseTrackerServer({ ...options, wrap: (server) => gate(server, principal, PERMISSIONS) }),
@@ -479,6 +496,94 @@ describe('A client that cannot prove who it is', () => {
     await expect(
       connect(handler, await token('dana@acme.com', { audience: 'https://elsewhere.example' })),
     ).rejects.toThrow();
+  });
+});
+
+describe('An agent that signs in as itself', () => {
+  const agent = 'claude-tag@clients';
+
+  it('is refused by default, since its token names no person', async ({ task }) => {
+    story.init(task, { tags: ['e2e', 'security'], covers: ['src/verifier.ts'] });
+
+    story.given('a client-credentials token: a subject, and no email', {
+      json: { label: 'Token claims', value: { sub: agent, gty: 'client-credentials' } },
+    });
+    stubJwks();
+
+    story.when('it connects to a server with the default verifier');
+    story.then('the connection fails: the verifier maps people, and this is not one');
+    await expect(connect(gatedHandler(), await agentToken(agent))).rejects.toThrow();
+  });
+
+  it('is served as the subject a rule names, once the deployment opts in', async ({ task }) => {
+    story.init(task, { tags: ['e2e', 'policy'], covers: ['src/verifier.ts', 'src/policy.ts'] });
+
+    story.given('a server that accepts tokens without an email, and a rule for this agent', {
+      json: { label: 'The rule', value: { match: { sub: agent }, role: 'reader' } },
+      note:
+        'A shared agent, such as an assistant in a team chat, holds one credential for everyone ' +
+        'it answers. The rule grants it what all of them may read.',
+    });
+    stubJwks();
+
+    const policy = definePolicy({
+      roles: { reader: ['cases:read'], lead: ['cases:read', 'cases:write'] },
+      rules: [{ match: { sub: agent }, role: 'reader' }],
+    });
+
+    story.when('the agent connects');
+    const client = await connect(gatedHandler({ requireEmail: false, policy }), await agentToken(agent));
+    const catalogue = await catalogueOf(client);
+    story.state({ label: 'Catalogue', value: catalogue });
+
+    story.then("it gets the reader's catalogue, and no more");
+    expect(catalogue.tools).toEqual(['get_case', 'search_cases']);
+    await client.close();
+  });
+
+  it('matches no email or domain rule, which name people', async ({ task }) => {
+    story.init(task, { tags: ['e2e', 'security'], covers: ['src/policy.ts'] });
+
+    story.given('a policy that grants everyone at acme.com', {
+      json: { label: 'The rule', value: { match: { domain: 'acme.com' }, role: 'lead' } },
+    });
+    stubJwks();
+
+    const policy = definePolicy({
+      roles: { reader: ['cases:read'], lead: ['cases:read', 'cases:write'] },
+      rules: [{ match: { domain: 'acme.com' }, role: 'lead' }],
+    });
+    const handler = gatedHandler({ requireEmail: false, policy });
+
+    story.when('a person from acme.com connects, and then the agent');
+    const person = await connect(handler, await token('dana@acme.com'));
+    expect((await catalogueOf(person)).tools).toEqual(['get_case', 'search_cases', 'update_case']);
+    await person.close();
+
+    story.then('the person is served and the agent is refused: it has no domain to match');
+    await expect(connect(handler, await agentToken(agent))).rejects.toThrow();
+  });
+
+  it('is admitted by a rule with no match, which means every verified caller', async ({ task }) => {
+    story.init(task, { tags: ['e2e', 'policy'], covers: ['src/policy.ts'] });
+
+    story.given('a catch-all rule, on a server that accepts agents', {
+      json: { label: 'The rule', value: { role: 'reader' } },
+      note: 'Every token the issuer mints for this server passes it, agents included.',
+    });
+    stubJwks();
+
+    const policy = definePolicy({
+      roles: { reader: ['cases:read'], lead: ['cases:read', 'cases:write'] },
+      rules: [{ role: 'reader' }],
+    });
+
+    story.when('the agent connects');
+    const client = await connect(gatedHandler({ requireEmail: false, policy }), await agentToken(agent));
+
+    story.then('it is served as a reader');
+    expect((await catalogueOf(client)).tools).toEqual(['get_case', 'search_cases']);
+    await client.close();
   });
 });
 
