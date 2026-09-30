@@ -221,6 +221,99 @@ Tags: `e2e`, `security`
 
 - **Then** the connection fails, rather than degrading to an anonymous session
 
+### An agent that signs in as itself
+
+### ✅ is refused by default, since its token names no person
+
+Tags: `e2e`, `security`
+
+- **Given** a client-credentials token: a subject, and no email
+  **Token claims**
+
+  ```json
+  {
+    "sub": "claude-tag@clients",
+    "gty": "client-credentials"
+  }
+  ```
+
+- **When** it connects to a server with the default verifier
+- **Then** the connection fails: the verifier maps people, and this is not one
+
+### ✅ is served as the subject a rule names, once the deployment opts in
+
+Tags: `e2e`, `policy`
+
+- **Given** a server that accepts tokens without an email, and a rule for this agent
+
+  > A shared agent, such as an assistant in a team chat, holds one credential for everyone it answers. The rule grants it what all of them may read.
+  > **The rule**
+
+  ```json
+  {
+    "match": {
+      "sub": "claude-tag@clients"
+    },
+    "role": "reader"
+  }
+  ```
+
+- **When** the agent connects
+  **Catalogue**
+
+    <details>
+    <summary>snapshot</summary>
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
+    </details>
+
+- **Then** it gets the reader's catalogue, and no more
+
+### ✅ matches no email or domain rule, which name people
+
+Tags: `e2e`, `security`
+
+- **Given** a policy that grants everyone at acme.com
+  **The rule**
+
+  ```json
+  {
+    "match": {
+      "domain": "acme.com"
+    },
+    "role": "lead"
+  }
+  ```
+
+- **When** a person from acme.com connects, and then the agent
+- **Then** the person is served and the agent is refused: it has no domain to match
+
+### ✅ is admitted by a rule with no match, which means every verified caller
+
+Tags: `e2e`, `policy`
+
+- **Given** a catch-all rule, on a server that accepts agents
+
+  > Every token the issuer mints for this server passes it, agents included.
+  > **The rule**
+
+  ```json
+  {
+    "role": "reader"
+  }
+  ```
+
+- **When** the agent connects
+- **Then** it is served as a reader
+
 ### Building the map this file gates with
 
 ### ✅ reads the same capability set the permission map prices

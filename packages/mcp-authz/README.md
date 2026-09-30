@@ -254,6 +254,11 @@ provider-specific assurance claim, or explicitly set `requireEmailVerified:
 false` only when the issuer contract guarantees the email another way. For
 opaque tokens, pass any SDK-compatible `tokenVerifier` plus `identityFromAuth`.
 
+An agent that signs in as itself, with an OAuth client-credentials token,
+carries a `sub` and no email. Set `verifier.requireEmail: false` to accept it,
+and name its `sub` in a rule to grant it roles. Email and domain rules never
+match it and `allowedDomain` refuses it, but a rule with no `match` admits it.
+
 ### `definePolicy(spec)`
 
 ```ts

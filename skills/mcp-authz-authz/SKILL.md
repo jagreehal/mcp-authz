@@ -120,6 +120,24 @@ boot, so a write tool stays unreachable until a role grants it.
 
 Source: apps/helpscout-example/src/mcp.ts
 
+### An agent with its own OAuth token
+
+An agent that holds a client-credentials token from your authorization server
+proves a `sub` and no email. Keep the built-in verifier and turn off its email
+requirement; the rule names the agent's `sub`:
+
+```ts
+createMcpFetch({
+  resourceServerUrl,
+  oauthMetadata: await discoverOAuth('https://auth.acme.com'),
+  verifier: { requireEmail: false },
+  policy, // rules: [{ match: { sub: 'svc-agent@clients' }, role: 'reader' }]
+  createServer,
+});
+```
+
+Email and domain rules never match the agent. A rule with no `match` does.
+
 ### Audit, and asking a person
 
 ```ts

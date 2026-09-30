@@ -42,6 +42,14 @@ export type VerifierOptions = {
   emailVerifiedClaim?: string;
   /** Require an explicit `true` verified-email claim. Defaults to true. */
   requireEmailVerified?: boolean;
+  /**
+   * Require an email in every token. Defaults to true. Set false to accept an
+   * agent that signs in as itself, such as an OAuth client-credentials token:
+   * its identity is its `sub`, which a policy rule names. Email and domain
+   * rules never match it, and neither does `allowedDomain`; a rule with no
+   * `match` does. A token that does carry an email is checked as before.
+   */
+  requireEmail?: boolean;
 };
 
 const invalidToken = (message: string) => new OAuthError(OAuthErrorCode.InvalidToken, message);
@@ -78,11 +86,12 @@ export function jwksVerifier(options: VerifierOptions): OAuthTokenVerifier & {
         throw invalidToken('Token has no `exp` claim.');
       }
 
-      const email = payload[emailClaim];
-      if (typeof email !== 'string' || !email) {
+      const claimed = payload[emailClaim];
+      const email = typeof claimed === 'string' && claimed ? claimed : undefined;
+      if (!email && (options.requireEmail ?? true)) {
         throw invalidToken(`Token carries no '${emailClaim}' claim, so there is no identity to map.`);
       }
-      if ((options.requireEmailVerified ?? true) && payload[emailVerifiedClaim] !== true) {
+      if (email && (options.requireEmailVerified ?? true) && payload[emailVerifiedClaim] !== true) {
         throw invalidToken(`Token does not prove '${emailClaim}' with '${emailVerifiedClaim}: true'.`);
       }
 
@@ -113,7 +122,9 @@ export function jwksVerifier(options: VerifierOptions): OAuthTokenVerifier & {
           issuer: options.issuer,
           sub,
           email,
-          emailVerified: options.requireEmailVerified === false || payload[emailVerifiedClaim] === true,
+          emailVerified:
+            email !== undefined &&
+            (options.requireEmailVerified === false || payload[emailVerifiedClaim] === true),
           domain,
           claims: payload,
         },
