@@ -1,5 +1,11 @@
 # mcp-authz
 
+## 0.3.0
+
+### Minor Changes
+
+- 111c593: `verifier.requireEmail: false` accepts a token with no email, such as an agent's OAuth client-credentials token. The caller's identity is its `sub`, which a policy rule names. Email and domain rules never match it.
+
 ## 0.2.0
 
 ### Minor Changes
