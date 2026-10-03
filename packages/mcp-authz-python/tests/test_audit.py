@@ -300,6 +300,8 @@ class TestTheWrappedSeam:
 
         server = gate(MCPServer("theirs"), self._reader(), {"boom": "cases:read"}, on_audit=events.append)
         server.add_tool(explodes, name="boom")
-        with pytest.raises(Exception, match="their tool exploded"):
+        with pytest.raises(Exception) as raised:
             await server.call_tool("boom", {})
+        # The SDK wraps a tool's exception in its own error, keeping the original as the cause.
+        assert "their tool exploded" in str(raised.value.__cause__ or raised.value)
         assert [event.phase for event in events] == ["attempt", "failure"]

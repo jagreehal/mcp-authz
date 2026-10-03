@@ -59,7 +59,8 @@ row describes you:
 
 <Aside type="note" title="Two cases need none of this">
   A stdio server on one laptop already has the OS account as its boundary. A server where every caller gets
-  identical access wants one service credential and no policy.
+  identical access wants one service credential and no policy. To have such a server show the model fewer
+  tools, use [`mcp-authz wrap`](/mcp-authz/wrap/): one line of client config.
 </Aside>
 
 <Aside type="caution" title="When not this">

@@ -331,6 +331,7 @@ easy to make and quiet when made.
 | [`mcp-authz-permission-map`](skills/mcp-authz-permission-map/SKILL.md) | Recording, pricing and drift-checking the map   |
 | [`mcp-authz-openapi`](skills/mcp-authz-openapi/SKILL.md)               | Gating an HTTP API by `operationId`             |
 | [`mcp-authz-audit`](skills/mcp-authz-audit/SKILL.md)                   | Wiring the audit and access-decision events     |
+| [`mcp-authz-wrap`](skills/mcp-authz-wrap/SKILL.md)                     | Showing a stdio server's tools selectively      |
 
 ## Spec stance (2026-07-28)
 

@@ -68,31 +68,29 @@
   "author": "Jag Reehal <jag@jagreehal.com> (https://jagreehal.com)",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/server": "^2.1.0",
+    "@modelcontextprotocol/client": "^2.3.0",
+    "@modelcontextprotocol/server": "^2.3.0",
     "awaitly": "6.2.0",
+    "cross-spawn": "^7.0.6",
     "jose": "^6.2.12"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/node": {
       "optional": true
-    },
-    "@modelcontextprotocol/client": {
-      "optional": true
     }
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
-    "@modelcontextprotocol/node": "^2.1.0",
-    "@types/node": "^26.2.0",
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@types/node": "^26.6.4",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "executable-stories-vitest": "8.8.0",
-    "tsdown": "^0.22.14",
+    "ajv": "^8.20.0",
+    "executable-stories-vitest": "8.10.1",
+    "tsdown": "^0.23.0",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.3",
     "zod": "^4.6.5"
   },
   "engines": {

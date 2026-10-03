@@ -21,3 +21,10 @@ overrides:
   sharp@<0.35.4: ^0.35.4
   lodash-es@<4.18.1: ^4.18.1
   undici@>=8.1.0 <8.10.2: ^8.10.2
+
+# No http-cache-semantics release fixes GHSA-ch52-4w7c-c8xp yet (4.2.0 is the
+# latest). It reaches this repo only through Astro in the private docs site,
+# which builds static pages; no published package depends on it.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-ch52-4w7c-c8xp

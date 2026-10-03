@@ -326,6 +326,22 @@ Tags: `e2e`, `gate`
 - **Then** they are precisely the labels PERMISSIONS gives a price to
   > The two vocabularies are written by different code. This is what keeps them one.
 
+## src/journey.story.test.ts
+
+### ✅ save, switch a tool off, connect, upgrade, refresh: the choice survives
+
+Tags: `journey`, `wrap`
+
+- **Given** a person saves a server's tools and their client entry
+- **And** switches update_case off by commenting out its line
+- **When** their client starts the server from the entry it was given
+- **Then** update_case is not listed, and calling it is refused
+- **And** the server is upgraded and gains a tool
+- **And** tools --check notices, and says how to take the change
+- **And** they refresh
+- **And** their choice survives, the new tool arrives switched off, and check passes
+- **And** the client still sees only what they chose
+
 ## src/mcp.story.test.ts
 
 ### Connecting Claude through Google
@@ -1249,3 +1265,146 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
 Tags: `proxy`, `streaming`
 
 - **Then** the byte cap still refuses it, counted over the reassembled event
+
+## src/wrap.story.test.ts
+
+### wrap
+
+### ✅ hides a denied tool from the listing
+
+Tags: `wrap`
+
+- **Given** a stdio server with three tools, wrapped with --deny delete_case
+- **When** the client lists tools
+- **Then** the denied tool is not there and the others are
+
+### ✅ refuses a call to a hidden tool without reaching the upstream
+
+Tags: `security`, `wrap`
+
+- **Given** a wrapped server with delete_case denied
+- **When** the client names the hidden tool anyway
+- **Then** it gets an error that says wrap blocked it
+- **And** a visible tool still runs, and only it reached the upstream
+
+### ✅ shows only allowed tools, says what it hid, and names a typo
+
+Tags: `dx`, `wrap`
+
+- **Given** a wrapped server with --allow search_cases,serch_cases
+- **When** the client lists tools
+- **Then** only the allowed tool is listed
+- **And** stderr says what was hidden, and that one name matched nothing
+
+### ✅ exits non-zero, saying why, when the upstream cannot start
+
+Tags: `dx`, `wrap`
+
+- **Given** a wrap whose upstream command does not exist
+- **Then** it exits 1 rather than hanging, and names the command
+
+### ✅ exits once the client goes away, with the upstream exit code
+
+Tags: `wrap`
+
+- **Given** a connected client
+- **When** the client closes its end
+- **Then** the upstream exits cleanly and wrap reports its code
+
+### wrap, at the edges of the protocol
+
+### ✅ reads a message the way the server does: one line per newline, whatever the text holds
+
+Tags: `security`, `wrap`
+
+- **Given** a wrapped server with delete_case denied
+- **When** a call carries U+2028 in an argument, and the listing carries it in descriptions
+- **Then** the call reaches the server whole, and the listing still comes back filtered
+
+### ✅ refuses a batch rather than forwarding calls it did not check
+
+Tags: `security`, `wrap`
+
+- **Given** a wrapped server with delete_case denied
+- **When** a client sends the denied call inside a JSON-RPC batch
+- **Then** wrap refuses the batch, and nothing reaches the server
+
+### ✅ refuses a line it cannot parse rather than forwarding it unchecked
+
+Tags: `security`, `wrap`
+
+- **Given** a wrapped server with delete_case denied
+- **When** a client sends a line that is not valid JSON
+- **Then** wrap answers with a parse error, and nothing reaches the server
+
+### ✅ refuses a message with a duplicate key, so the two sides cannot read different calls
+
+Tags: `security`, `wrap`
+
+- **Given** a wrapped server with delete_case denied
+- **When** a client names two tools in one call, one of them spelled with an escape
+- **Then** wrap answers that request with an error, and nothing reaches the server
+
+### ✅ forwards an allowed call byte for byte, so large numbers keep every digit
+
+Tags: `wrap`
+
+- **Given** a wrapped server
+- **When** a client calls a visible tool with an id larger than a double can hold exactly
+- **Then** the server receives exactly what was sent
+
+### ✅ filters a listing even when the server reuses its id for a request of its own
+
+Tags: `security`, `wrap`
+
+- **Given** a server that sends roots/list with the same id as the pending tools/list
+- **When** the client lists tools
+- **Then** the server's request passes through, and the listing is still filtered
+
+### ✅ stops a server that ignores the end of its input, rather than hanging
+
+Tags: `wrap`
+
+- **Given** a server that ignores both EOF and SIGTERM
+- **When** the client disconnects
+- **Then** wrap escalates to SIGKILL and exits
+
+### ✅ stops the server when wrap itself is told to stop
+
+Tags: `wrap`
+
+- **Given** a running server, and a client that has not disconnected
+- **When** wrap receives a signal
+- **Then** the server does not outlive it
+
+### ✅ stops the real server, not just the launcher in front of it
+
+Tags: `security`, `wrap`
+
+- **Given** a launcher, like npx, that started a server which ignores SIGTERM
+- **When** wrap is told to stop
+- **Then** by the time wrap exits, the server is gone too
+
+### ✅ finishes stopping the server when the client has already closed its end
+
+Tags: `wrap`
+
+- **Given** a client whose end of the pipe is closed, as on disconnect
+- **When** the client disconnects and the server says one last thing
+- **Then** wrap skips the write and still stops the server
+
+### ✅ reaps the server when its launcher exits before the client disconnects
+
+Tags: `security`, `wrap`
+
+- **Given** a launcher that starts a persistent server and immediately exits 23
+- **When** wrap observes the launcher exit with client input still open
+- **Then** the descendant is gone and the launcher exit code is preserved
+
+### ✅ drops messages that arrive while it is shutting down
+
+Tags: `wrap`
+
+- **Given** a wrap that has started to stop
+- **When** the client sends one more request
+- **Then** wrap still finishes stopping the server

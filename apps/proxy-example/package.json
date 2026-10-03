@@ -14,16 +14,16 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "mcp-authz": "workspace:*",
-    "@modelcontextprotocol/node": "^2.1.0"
+    "@modelcontextprotocol/node": "^2.1.1",
+    "mcp-authz": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "tsdown": "^0.22.14",
-    "tsx": "^4.23.12",
+    "@types/node": "^26.6.4",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "tsdown": "^0.23.0",
+    "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "wrangler": "^4.42.0"
+    "wrangler": "^4.147.0"
   },
   "engines": {
     "node": ">=24"

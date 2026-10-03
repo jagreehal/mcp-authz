@@ -80,6 +80,19 @@ npx mcp-authz record \
 committed file and exits 1 on drift — the usual CI guard before deploy or before
 standing up a [proxy](/mcp-authz/typescript/proxy/).
 
+## `tools` and `wrap`
+
+```bash
+npx mcp-authz tools --out some.jsonc [--client-out .mcp.json] -- npx -y some-mcp
+npx mcp-authz tools --config some.jsonc --refresh
+npx mcp-authz tools --check some.jsonc
+npx mcp-authz wrap --config some.jsonc
+```
+
+Save a stdio server's tools as a config, check it against the server, and run
+the server with only the tools it lists. See
+[Trim a server's tools](/mcp-authz/wrap/).
+
 ## In code
 
 `policy.explain(identity)` answers the same question inside a process, and

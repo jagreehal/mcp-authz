@@ -40,6 +40,7 @@ export default defineConfig({
             { label: 'What this is', slug: 'introduction' },
             { label: 'Deployment', slug: 'concepts/deployment' },
             { label: 'Quick start', slug: 'quick-start' },
+            { label: "Just trim a server's tools", slug: 'wrap' },
             { label: 'Run the example', slug: 'run-the-example' },
           ],
         },
