@@ -1,5 +1,5 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from './cli';
+import { Ajv } from 'ajv';
+import { parseJsonc, readWrapConfig, writeWrapConfig } from './wrap-config';
 
 const dir = mkdtempSync(join(tmpdir(), 'mcp-authz-cli-'));
 
@@ -49,7 +51,10 @@ beforeEach(() => {
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => ((out += chunk), true));
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => ((err += chunk), true));
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it('prints usage for --help', () => {
   expect(main(['--help'])).toBe(0);
@@ -226,5 +231,353 @@ describe('record', () => {
 
     expect(code).toBe(0);
     expect(out).toContain('no FINGERPRINTS');
+  });
+});
+
+it('still takes a path after --, for the commands that are not wrap or tools', () => {
+  expect(main(['check', '--', POLICY])).toBe(0);
+  expect(out).toContain('2 roles');
+});
+
+describe('wrap', () => {
+  it('is in the usage', () => {
+    main(['--help']);
+    expect(out).toContain('mcp-authz wrap [--allow <a,b> | --deny <a,b>] -- <command> [args...]');
+  });
+
+  it('refuses --allow and --deny together, since one has to win', () => {
+    expect(main(['wrap', '--allow', 'a', '--deny', 'b', '--', 'node', 'server.js'])).toBe(1);
+    expect(err).toContain('--allow or --deny, not both');
+  });
+
+  it('needs the upstream command after --', () => {
+    expect(main(['wrap', '--deny', 'a'])).toBe(1);
+    expect(err).toContain('wrap needs the server command after --');
+  });
+});
+
+describe('tools', () => {
+  it('lists what a stdio server offers, with its hints, so you know what to pass wrap', async () => {
+    const upstream = fileURLToPath(new URL('./__fixtures__/stdio-upstream.mjs', import.meta.url));
+
+    expect(await main(['tools', '--', process.execPath, upstream])).toBe(0);
+
+    expect(out.split('\n').filter(Boolean)).toEqual([
+      'delete_case   destructive  Remove a case',
+      'search_cases  read-only    Find cases',
+      'update_case   unknown      Change a case',
+    ]);
+  });
+
+  it("hands the server this shell's environment, credentials included", async () => {
+    const upstream = fileURLToPath(new URL('./__fixtures__/stdio-upstream.mjs', import.meta.url));
+    vi.stubEnv('CASE_TRACKER_TOKEN', 'secret');
+
+    expect(await main(['tools', '--', process.execPath, upstream])).toBe(0);
+
+    expect(out).toContain('export_cases');
+  });
+
+  it('needs the server command after --', () => {
+    expect(main(['tools'])).toBe(1);
+    expect(err).toContain('tools needs the server command after --');
+  });
+});
+
+describe('a saved wrap config', () => {
+  it('tools --config --refresh reruns the saved server, keeping choices and leaving new tools off', async () => {
+    const config = join(dir, 'refresh.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    // The person switches search_cases off by commenting it out.
+    writeFileSync(config, readFileSync(config, 'utf8').replace('"search_cases",', '// "search_cases",'));
+    // The server is upgraded and gains a tool.
+    vi.stubEnv('CASE_TRACKER_TOKEN', 'secret');
+    out = '';
+
+    expect(await main(['tools', '--config', config, '--refresh'])).toBe(0);
+
+    expect(readWrapConfig(config).allow).toEqual(['update_case']);
+    expect(readFileSync(config, 'utf8')).toContain('// "export_cases",');
+    expect(out).toContain('1 new since last saved, left commented out');
+  });
+
+  it('--refresh needs the config to refresh', () => {
+    expect(main(['tools', '--refresh'])).toBe(1);
+    expect(err).toContain('--refresh rewrites a saved config: tools --config <name>.jsonc --refresh');
+  });
+
+  it('--client-out writes the mcpServers file, keeping other servers and the env you added', async () => {
+    const config = join(dir, 'cases.jsonc');
+    const client = join(dir, 'mcp.json');
+    writeFileSync(
+      client,
+      JSON.stringify({
+        mcpServers: {
+          other: { command: 'other-mcp' },
+          cases: {
+            command: 'old',
+            args: ['old-arg'],
+            env: { CASE_TRACKER_TOKEN: 'kept' },
+            disabled: true,
+            timeout: 60,
+          },
+        },
+      }),
+    );
+
+    expect(
+      await main(['tools', '--out', config, '--client-out', client, '--', process.execPath, upstream]),
+    ).toBe(0);
+
+    expect(JSON.parse(readFileSync(client, 'utf8'))).toEqual({
+      mcpServers: {
+        other: { command: 'other-mcp' },
+        // Only how it starts changes; a disabled server stays disabled.
+        cases: {
+          command: 'npx',
+          args: ['-y', 'mcp-authz', 'wrap', '--config', config],
+          env: { CASE_TRACKER_TOKEN: 'kept' },
+          disabled: true,
+          timeout: 60,
+        },
+      },
+    });
+    // Still printed, for the clients whose config is not a file you can name.
+    expect(out).toContain('"cases": {');
+  });
+
+  it('keeps the directory discovery ran in, so a relative server path still resolves', async () => {
+    // The config is saved far from the server; it must still run there.
+    const config = join(dir, 'relative.jsonc');
+
+    await main(['tools', '--out', config, '--', process.execPath, 'src/__fixtures__/stdio-upstream.mjs']);
+
+    expect(readWrapConfig(config).cwd).toBe(process.cwd());
+  });
+
+  it('check passes a config that matches the server', async () => {
+    const config = join(dir, 'fresh.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    out = '';
+
+    expect(await main(['tools', '--check', config])).toBe(0);
+    expect(out).toContain('3 tools, as recorded in');
+  });
+
+  it('check fails on a listed name the server lacks, and on tools that came or went', async () => {
+    const config = join(dir, 'drifted.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    // As if saved against an older server: no delete_case then, export_cases since removed.
+    const schemaPath = join(dir, 'drifted.schema.json');
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+    schema.definitions.tool.anyOf = [
+      { const: 'export_cases' },
+      { const: 'search_cases' },
+      { const: 'update_case' },
+    ];
+    writeFileSync(schemaPath, JSON.stringify(schema));
+    writeFileSync(
+      config,
+      readFileSync(config, 'utf8').replace('"search_cases",', '"search_cases", "serch_cases",'),
+    );
+    out = '';
+
+    expect(await main(['tools', '--check', config])).toBe(1);
+    expect(out).toContain('serch_cases');
+    expect(out).toContain('+ delete_case');
+    expect(out).toContain('- export_cases');
+  });
+
+  it('tools --out on an existing config keeps your choices and adds new tools switched off', async () => {
+    const config = join(dir, 'kept.jsonc');
+    writeFileSync(
+      config,
+      `{ "server": { "command": ${JSON.stringify(process.execPath)} }, "allow": ["search_cases", "delete_case"] }`,
+    );
+    writeFileSync(
+      join(dir, 'kept.schema.json'),
+      JSON.stringify({
+        definitions: { tool: { anyOf: [{ const: 'search_cases' }, { const: 'delete_case' }] } },
+      }),
+    );
+
+    expect(await main(['tools', '--out', config, '--', process.execPath, upstream])).toBe(0);
+
+    // delete_case stays on because you turned it on; update_case is new, so off.
+    expect(readWrapConfig(config).allow).toEqual(['delete_case', 'search_cases']);
+    expect(readFileSync(config, 'utf8')).toContain('// "update_case",');
+    expect(out).toContain('1 new since last saved, left commented out');
+  });
+
+  it('reads the file as a person leaves it: comments, // in strings, a trailing comma', () => {
+    const config = join(dir, 'edited.jsonc');
+    writeFileSync(
+      config,
+      [
+        '{',
+        '  /* the server */ "server": { "command": "npx", "args": ["-y", "https://x.dev//mcp"] },',
+        '  "allow": [',
+        '    "search_cases", // read-only',
+        '    "delete_case", // uncommented, and the comma left behind',
+        '  ],',
+        '}',
+      ].join('\n'),
+    );
+
+    expect(readWrapConfig(config)).toEqual({
+      command: 'npx',
+      args: ['-y', 'https://x.dev//mcp'],
+      // No cwd given: the config's own directory, never the client's.
+      cwd: dir,
+      allow: ['search_cases', 'delete_case'],
+    });
+  });
+
+  it('names the file and the field when the config is wrong', () => {
+    const config = join(dir, 'wrong.jsonc');
+    writeFileSync(config, '{ "server": { "command": "npx" }, "allow": ["a"], "deny": ["b"] }');
+
+    expect(() => readWrapConfig(config)).toThrow(`${config}: use "allow" or "deny", not both.`);
+  });
+
+  it('writes a valid schema for a server with no tools, one that accepts no names', () => {
+    const config = join(dir, 'empty.jsonc');
+
+    writeWrapConfig(config, { command: 'npx', args: [], cwd: dir }, []);
+
+    const schema = JSON.parse(readFileSync(join(dir, 'empty.schema.json'), 'utf8'));
+    const validate = new Ajv({ strict: false }).compile(schema);
+    expect(validate(parseJsonc(readFileSync(config, 'utf8')))).toBe(true);
+    expect(validate({ server: { command: 'npx' }, allow: ['anything'] })).toBe(false);
+  });
+
+  it('refuses a key it does not know, so a misspelled "allow" cannot show everything', () => {
+    const config = join(dir, 'typo.jsonc');
+    writeFileSync(config, '{ "server": { "command": "npx" }, "alow": ["read"] }');
+
+    expect(() => readWrapConfig(config)).toThrow(`${config}: unknown key "alow"`);
+  });
+
+  it('wrap --config takes the server from the file, so -- is not needed as well', () => {
+    expect(main(['wrap', '--config', 'x.jsonc', '--', 'npx', 'other'])).toBe(1);
+    expect(err).toContain('wrap takes --config or a command after --, not both.');
+  });
+
+  const upstream = fileURLToPath(new URL('./__fixtures__/stdio-upstream.mjs', import.meta.url));
+
+  it('tools --out saves what it found as a config wrap can run, and says how to use it', async () => {
+    const config = join(dir, 'cases.jsonc');
+
+    expect(await main(['tools', '--out', config, '--', process.execPath, upstream])).toBe(0);
+
+    // Destructive tools start commented out: visible, one keystroke from on.
+    expect(readWrapConfig(config)).toEqual({
+      command: process.execPath,
+      args: [upstream],
+      cwd: process.cwd(),
+      allow: ['search_cases', 'update_case'],
+    });
+    const text = readFileSync(config, 'utf8');
+    expect(text).toContain('// "delete_case", // destructive · Remove a case');
+    expect(text).toContain('"search_cases", // read-only · Find cases');
+    // Every entry ends in a comma, so uncommenting any line, as the file
+    // invites, leaves it parseable.
+    writeFileSync(config, text.replace('// "delete_case",', '"delete_case",'));
+    expect(readWrapConfig(config).allow).toEqual(['search_cases', 'update_case', 'delete_case']);
+
+    // The schema lists every tool, so an editor completes names and flags typos.
+    const schema = JSON.parse(readFileSync(join(dir, 'cases.schema.json'), 'utf8'));
+    expect(schema.definitions.tool.anyOf.map((t: { const: string }) => t.const)).toEqual([
+      'delete_case',
+      'search_cases',
+      'update_case',
+    ]);
+    // What the editor will check: the file as generated passes its own schema,
+    // and a misspelled tool does not.
+    const validate = new Ajv({ strict: false }).compile(schema);
+    const saved = parseJsonc(text) as { allow: string[] };
+    expect(validate(saved)).toBe(true);
+    expect(validate({ ...saved, allow: [...saved.allow, 'serch_cases'] })).toBe(false);
+
+    // Hovering a name shows what it does and what it takes; a tool that takes
+    // nothing says nothing about arguments.
+    const described = Object.fromEntries(
+      schema.definitions.tool.anyOf.map((t: { const: string; description: string }) => [
+        t.const,
+        t.description,
+      ]),
+    );
+    expect(described.update_case).toBe('unknown · Change a case\n\nTakes: id (required), title');
+    expect(described.search_cases).toBe('read-only · Find cases');
+
+    // The client entry names the config by absolute path: clients start
+    // servers from a working directory nobody chose.
+    expect(out).toContain('"cases": {');
+    expect(out).toContain(`"args": ["-y", "mcp-authz", "wrap", "--config", ${JSON.stringify(config)}]`);
+  });
+});
+
+describe('check reads files and runs nothing', () => {
+  const upstream = fileURLToPath(new URL('./__fixtures__/stdio-upstream.mjs', import.meta.url));
+
+  it('refuses a wrap config, pointing at the command that starts servers', async () => {
+    const config = join(dir, 'never-run.jsonc');
+    const marker = join(dir, 'ran');
+    writeFileSync(
+      config,
+      JSON.stringify({
+        server: {
+          command: process.execPath,
+          args: ['-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, '')`],
+        },
+      }),
+    );
+
+    expect(await main(['check', config])).toBe(1);
+
+    expect(err).toContain(`tools --check ${config}`);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('tools says which command it is about to run from a file', async () => {
+    const config = join(dir, 'announced.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    err = '';
+
+    await main(['tools', '--check', config]);
+
+    expect(err).toContain(`Running ${process.execPath} ${upstream} from ${config}`);
+  });
+});
+
+describe('errors say what to do next', () => {
+  it('a command that is not installed', async () => {
+    expect(await main(['tools', '--', 'mcp-authz-no-such-server'])).toBe(1);
+    expect(err).toContain('Could not start mcp-authz-no-such-server: command not found.');
+    expect(err).toContain('Install it, or give its full path.');
+  });
+
+  it('a server that exits before listing, as one missing its API key does', async () => {
+    expect(await main(['tools', '--', process.execPath, '-e', 'process.exit(3)'])).toBe(1);
+    expect(err).toContain('The server exited before listing its tools.');
+    expect(err).toContain('export them in this shell');
+  });
+
+  it('a config that is not valid JSONC', () => {
+    const config = join(dir, 'malformed.jsonc');
+    writeFileSync(config, '{ "server": { "command": "npx" } "allow": [] }');
+
+    expect(() => readWrapConfig(config)).toThrow(
+      /malformed\.jsonc: not valid JSONC .*Look for a missing comma or quote/,
+    );
+    // The suggested recovery has to work on the file as it is: tools --out reads it.
+    expect(() => readWrapConfig(config)).toThrow(`move it aside (mv ${config} ${config}.bak)`);
+  });
+
+  it('a key it does not know, naming the ones it does', () => {
+    const config = join(dir, 'unknown.jsonc');
+    writeFileSync(config, '{ "server": { "command": "npx" }, "alow": [] }');
+
+    expect(() => readWrapConfig(config)).toThrow('expected one of: $schema, server, allow, deny');
   });
 });

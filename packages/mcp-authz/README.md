@@ -22,7 +22,7 @@ Plenty of good tools solve the neighbouring problems. Take one of them when its 
 | OAuth plumbing                 | official SDK, mcp-auth | Authentication and resource-server mechanics, with no permission model |
 | Embedded dependency            | **mcp-authz**          | One package, and a policy engine that stays small by design            |
 
-Two cases need none of this. A stdio server on one laptop already has the OS account as its boundary. A server where every caller gets identical access wants one service credential and no policy.
+Two cases need none of this. A stdio server on one laptop already has the OS account as its boundary. A server where every caller gets identical access wants one service credential and no policy. To have that stdio server show the model fewer tools, [`mcp-authz wrap`](#mcp-authz-wrap-fewer-tools-from-a-stdio-server) does that with no policy ([walkthrough](https://jagreehal.github.io/mcp-authz/wrap/)).
 
 ### You need one integration seam
 
@@ -592,8 +592,6 @@ as served, so a snapshot turns that into a diff on the pull request. Nothing is
 enforced at boot: a digest in production is a second source of truth, and would
 make a description edit an outage.
 
-`@modelcontextprotocol/client` is an optional peer, needed only by this subpath.
-
 ### `mcp-authz/openapi` — the same bet on an HTTP API
 
 An OpenAPI document is the other catalogue an agent reads. A tool that is never
@@ -862,6 +860,41 @@ role can reach fails the pull request rather than the deploy. It exits 1 on that
 and on an invalid policy, and 0 on an unused permission, which stays a warning
 because granting a role ahead of the tool that will use it is how a staged
 rollout works.
+
+### `mcp-authz wrap`: fewer tools from a stdio server
+
+`wrap` sits in front of any stdio MCP server and hides the tools you leave out,
+so a model reaches less than your API key allows.
+
+```bash
+npx -y mcp-authz tools --out cases.jsonc -- npx -y @acme/cases-mcp
+```
+
+`tools` saves the server's tools to `cases.jsonc`, one line each with what the
+tool does and what the server says about it, destructive ones commented out.
+A schema beside it gives your editor completion and typo checks. `tools` also
+prints the `mcpServers` entry to paste, or writes it into a client config file
+with `--client-out .mcp.json`:
+
+```json
+"cases": {
+  "command": "npx",
+  "args": ["-y", "mcp-authz", "wrap", "--config", "/Users/you/mcp/cases.jsonc"],
+  "env": { "CASES_API_KEY": "..." }
+}
+```
+
+`wrap` drops unlisted tools from `tools/list` and answers a call to one with an
+error that names it, so the server never receives it. Tools the server adds
+later stay hidden until you list them. `mcp-authz tools --check cases.jsonc` reports
+what changed on the server since you saved, and `tools --config cases.jsonc
+--refresh` records it, keeping your choices. For a quick trial, `wrap --deny
+a,b -- <command>` takes the list as arguments.
+
+`wrap` limits one session; scope the key itself where the service supports it.
+When the client disconnects, `wrap` stops the whole process tree, `npx` and the
+server it started. The [walkthrough](https://jagreehal.github.io/mcp-authz/wrap/)
+covers the rest.
 
 ### `mcp-authz/policy`
 

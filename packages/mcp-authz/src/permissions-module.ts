@@ -2,9 +2,9 @@
  * Rendering a permission map as source, shared by everything that records a
  * catalogue.
  *
- * Its own module because the MCP recorder needs an optional peer dependency to
- * talk to a server, and the OpenAPI one only needs a file it was handed. A
- * caller after the scaffold should not have to install a client to get it.
+ * Its own module because the MCP recorder loads a client to talk to a server,
+ * and the OpenAPI one only needs a file it was handed. A caller after the
+ * scaffold should not have to load a client to get it.
  */
 
 export type PermissionMapRecord = {

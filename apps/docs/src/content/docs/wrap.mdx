@@ -1,0 +1,143 @@
+---
+title: Trim a server's tools
+description: Show the model fewer of a local MCP server's tools, with one change to your client config. No policy, no sign-in.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+You run a stdio MCP server on one API key, and it offers more tools than you
+want a model to reach. `mcp-authz wrap` sits in front of it and hides the ones
+you leave out. It works with any stdio server and needs nothing else from this
+library.
+
+<Steps>
+
+1. **Save what the server offers.** Put the command your client runs after
+   `--`. The server gets your shell's environment, API key included.
+
+   ```bash
+   npx -y mcp-authz tools --out cases.jsonc -- npx -y @acme/cases-mcp
+   ```
+
+   You get `cases.jsonc`, a schema beside it, and the entry for your client.
+
+2. **Choose.** Each tool sits on its own line with what it does and what the
+   server says about it. Destructive tools start commented out. Uncomment a
+   line to switch that tool on.
+
+   ```jsonc
+   {
+     "$schema": "./cases.schema.json",
+     "server": { "command": "npx", "args": ["-y", "@acme/cases-mcp"], "cwd": "." },
+     "allow": [
+       "get_case", // read-only · One case with its steps and history.
+       "search_cases", // read-only · Find cases by text, label or owner.
+       "update_case", // unknown · Change fields on a case.
+       // "delete_case", // destructive · Remove a case and its history.
+       // "run_query", // destructive · Run any API call the service supports.
+     ],
+   }
+   ```
+
+   Your editor reads the schema, so it completes tool names, shows what each
+   tool does and takes, and underlines a typo. `wrap` refuses a key it does
+   not know, such as `"alow"`. `cwd` records where discovery ran, so a relative
+   path in `args` resolves the same way wherever your client starts the server.
+
+3. **Point your client at it.** Paste the entry `tools --out` printed and add
+   the `env` the server needs. The path is absolute because your client picks
+   its own working directory. If your client reads a file such as `.mcp.json`,
+   add `--client-out .mcp.json` to step 1 and `tools` writes the entry there,
+   keeping your other servers and every setting already on this one.
+
+   ```json
+   {
+     "mcpServers": {
+       "cases": {
+         "command": "npx",
+         "args": ["-y", "mcp-authz", "wrap", "--config", "/Users/you/mcp/cases.jsonc"],
+         "env": { "CASES_API_KEY": "your-api-key" }
+       }
+     }
+   }
+   ```
+
+4. **Confirm.** Restart the server in your client and find this line in its
+   server log:
+
+   ```text
+   mcp-authz wrap: 3/5 tools exposed, hidden: delete_case, run_query
+   ```
+
+</Steps>
+
+Commit the config and its schema. Keep secrets in your client config.
+
+## When the server changes
+
+```bash
+npx -y mcp-authz tools --check cases.jsonc
+```
+
+`tools --check` starts the server the file names and compares the two. It reports a name in
+`allow` the server no longer has, a tool added since you saved, and a tool
+removed, and exits 1 on any of them. In CI, run it on the default branch or
+on changes you have reviewed: it starts whatever `server.command` the file
+names, as `wrap` does.
+
+Refresh the file to take the change. `tools` reruns the server you saved, from
+the directory you saved it in:
+
+```bash
+npx -y mcp-authz tools --config cases.jsonc --refresh
+```
+
+Your choices stay. A new tool arrives commented out, so you see it in the diff
+and switch it on yourself. Until then, `wrap` keeps it hidden.
+
+## Quick trial without a file
+
+```bash
+npx -y mcp-authz wrap --deny delete_case,run_query -- npx -y @acme/cases-mcp
+```
+
+| Flag          | Shows                         | A tool the server adds later |
+| ------------- | ----------------------------- | ---------------------------- |
+| neither       | everything                    | shown                        |
+| `--deny a,b`  | everything except `a` and `b` | shown                        |
+| `--allow a,b` | only `a` and `b`              | hidden                       |
+
+Names are exact and comma-separated. `tools` without `--out` prints the list
+to choose from.
+
+## Hidden tools
+
+The model's tool list leaves them out. A call that names one anyway gets an
+error from `wrap`, `Tool "delete_case" is blocked by mcp-authz wrap`, and the
+server never receives it. Prompts, resources and every other message pass
+through as written.
+
+<Aside type="caution" title="This restricts the session">
+  `wrap` decides what this client can reach through this server. The API key keeps its full access for any
+  other program that holds it. Where the service supports scoped keys, give the key only the access you need
+  and use `wrap` as the second layer.
+</Aside>
+
+## When the session ends
+
+When your client disconnects or stops `wrap`, `wrap` closes the server's
+input, then sends `SIGTERM`, then `SIGKILL`, two seconds apart. The signals
+reach the whole process tree, so the server that `npx` started stops along
+with `npx`. The exit code is the server's.
+
+<Aside type="note" title="Windows">
+  On Windows, `wrap` runs the server inside a Job Object, so the server and its descendants stop together,
+  even after their launcher exits. `wrap` resolves commands such as `npx` through Windows' executable
+  extensions. After the input-close grace period, `wrap` ends the job, since Windows has no `SIGTERM`.
+</Aside>
+
+## Several people, different tools
+
+`wrap` serves one session on one machine. When several people share a server
+and need different tools, use a [policy](/mcp-authz/concepts/policies/) keyed
+on who signed in. It takes the same tool names.
