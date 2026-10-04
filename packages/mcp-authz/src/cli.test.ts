@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -204,7 +204,7 @@ describe('record', () => {
       map,
       [
         "export const PERMISSIONS = { get_case: 'cases:read', 'prompt:triage': 'cases:read' } as const;",
-        "export const FINGERPRINTS = { get_case: 'stale', 'prompt:triage': 'stale' } as const;",
+        "export const DEFINITIONS = { get_case: { name: 'get_case', description: 'Old words' }, 'prompt:triage': {} };",
       ].join('\n'),
     );
 
@@ -213,24 +213,42 @@ describe('record', () => {
     expect(code).toBe(1);
     // update_case exists on the server and was never priced.
     expect(out).toContain('update_case');
-    // get_case is priced, but is not the tool that was recorded.
-    expect(out).toContain('get_case');
+    // get_case is priced, but is not the tool that was recorded, and the
+    // output says what moved rather than only that something did.
+    expect(out).toContain('~ get_case');
+    expect(out).toContain('description was: "Old words"');
   });
 
-  it('says so when the committed map carries no baseline to compare against', async () => {
-    // A map written before FINGERPRINTS existed, or by hand. Names can still be
-    // compared; definitions cannot, and a silent partial check in CI is worse
-    // than no check, because it reads as a pass.
-    const map = join(dir, 'baseline-less.ts');
+  it('fails a map whose record misses a priced capability, whole or in part', async () => {
+    // Written by hand, or with an entry lost. A check that skipped what it
+    // cannot compare would read as a pass while comparing less than it says.
+    const map = join(dir, 'gap.ts');
     writeFileSync(
       map,
       "export const PERMISSIONS = { get_case: 'cases:read', update_case: 'cases:write', 'prompt:triage': 'cases:read' } as const;\n",
     );
 
-    const code = await main(['record', 'src/__fixtures__/connector.ts', '--check', map]);
+    expect(await main(['record', 'src/__fixtures__/connector.ts', '--check', map])).toBe(1);
+    expect(out).toContain('? get_case');
+    expect(out).toContain('priced, but DEFINITIONS has no record of it');
 
-    expect(code).toBe(0);
-    expect(out).toContain('no FINGERPRINTS');
+    out = '';
+    const full = join(dir, 'full.ts');
+    await main(['record', 'src/__fixtures__/connector.ts', '--out', full]);
+    const { PERMISSIONS, DEFINITIONS } = (await import(pathToFileURL(full).href)) as {
+      PERMISSIONS: Record<string, string>;
+      DEFINITIONS: Record<string, unknown>;
+    };
+    const kept = { ...DEFINITIONS };
+    delete kept.update_case;
+    const partial = join(dir, 'partial.ts');
+    writeFileSync(
+      partial,
+      `export const PERMISSIONS = ${JSON.stringify(PERMISSIONS)};\nexport const DEFINITIONS = ${JSON.stringify(kept)};\n`,
+    );
+    out = '';
+    expect(await main(['record', 'src/__fixtures__/connector.ts', '--check', partial])).toBe(1);
+    expect(out).toContain('? update_case');
   });
 });
 
@@ -252,7 +270,7 @@ describe('wrap', () => {
 
   it('needs the upstream command after --', () => {
     expect(main(['wrap', '--deny', 'a'])).toBe(1);
-    expect(err).toContain('wrap needs the server command after --');
+    expect(err).toContain('wrap needs a config, e.g. wrap cases.jsonc, or the server command after --');
   });
 });
 
@@ -263,9 +281,9 @@ describe('tools', () => {
     expect(await main(['tools', '--', process.execPath, upstream])).toBe(0);
 
     expect(out.split('\n').filter(Boolean)).toEqual([
-      'delete_case   destructive  Remove a case',
-      'search_cases  read-only    Find cases',
-      'update_case   unknown      Change a case',
+      'delete_case   destructive  ~35 tokens  Remove a case',
+      'search_cases  read-only    ~34 tokens  Find cases',
+      'update_case   unknown      ~65 tokens  Change a case',
     ]);
   });
 
@@ -285,25 +303,30 @@ describe('tools', () => {
 });
 
 describe('a saved wrap config', () => {
-  it('tools --config --refresh reruns the saved server, keeping choices and leaving new tools off', async () => {
+  it('tools --refresh reruns the saved server, keeping choices and leaving new tools off', async () => {
     const config = join(dir, 'refresh.jsonc');
     await main(['tools', '--out', config, '--', process.execPath, upstream]);
-    // The person switches search_cases off by commenting it out.
-    writeFileSync(config, readFileSync(config, 'utf8').replace('"search_cases",', '// "search_cases",'));
+    // The person switches update_case on and search_cases off.
+    writeFileSync(
+      config,
+      readFileSync(config, 'utf8')
+        .replace('// "update_case",', '"update_case",')
+        .replace('    "search_cases",', '    // "search_cases",'),
+    );
     // The server is upgraded and gains a tool.
     vi.stubEnv('CASE_TRACKER_TOKEN', 'secret');
     out = '';
 
-    expect(await main(['tools', '--config', config, '--refresh'])).toBe(0);
+    expect(await main(['tools', '--refresh', config])).toBe(0);
 
     expect(readWrapConfig(config).allow).toEqual(['update_case']);
     expect(readFileSync(config, 'utf8')).toContain('// "export_cases",');
-    expect(out).toContain('1 new since last saved, left commented out');
+    expect(out).toContain('1 new and 0 changed since last saved, left commented out');
   });
 
-  it('--refresh needs the config to refresh', () => {
-    expect(main(['tools', '--refresh'])).toBe(1);
-    expect(err).toContain('--refresh rewrites a saved config: tools --config <name>.jsonc --refresh');
+  it('--refresh takes the server from the file, so -- is not needed as well', () => {
+    expect(main(['tools', '--refresh', 'x.jsonc', '--', 'npx', 'other'])).toBe(1);
+    expect(err).toContain('takes no command after --');
   });
 
   it('--client-out writes the mcpServers file, keeping other servers and the env you added', async () => {
@@ -335,7 +358,7 @@ describe('a saved wrap config', () => {
         // Only how it starts changes; a disabled server stays disabled.
         cases: {
           command: 'npx',
-          args: ['-y', 'mcp-authz', 'wrap', '--config', config],
+          args: ['-y', 'mcp-authz', 'wrap', config],
           env: { CASE_TRACKER_TOKEN: 'kept' },
           disabled: true,
           timeout: 60,
@@ -370,20 +393,22 @@ describe('a saved wrap config', () => {
     // As if saved against an older server: no delete_case then, export_cases since removed.
     const schemaPath = join(dir, 'drifted.schema.json');
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
-    schema.definitions.tool.anyOf = [
-      { const: 'export_cases' },
-      { const: 'search_cases' },
-      { const: 'update_case' },
-    ];
+    const pins = schema['x-mcp-authz-tools'];
+    schema['x-mcp-authz-tools'] = {
+      export_cases: { description: 'Export every case' },
+      search_cases: pins.search_cases,
+      update_case: pins.update_case,
+    };
     writeFileSync(schemaPath, JSON.stringify(schema));
+    // export_cases was approved then, and is still allowed.
     writeFileSync(
       config,
-      readFileSync(config, 'utf8').replace('"search_cases",', '"search_cases", "serch_cases",'),
+      readFileSync(config, 'utf8').replace('"search_cases",', '"search_cases", "export_cases",'),
     );
     out = '';
 
     expect(await main(['tools', '--check', config])).toBe(1);
-    expect(out).toContain('serch_cases');
+    expect(out).toContain('? export_cases');
     expect(out).toContain('+ delete_case');
     expect(out).toContain('- export_cases');
   });
@@ -394,11 +419,14 @@ describe('a saved wrap config', () => {
       config,
       `{ "server": { "command": ${JSON.stringify(process.execPath)} }, "allow": ["search_cases", "delete_case"] }`,
     );
+    // Recorded as the server served them then, before update_case existed.
+    await main(['tools', '--out', join(dir, 'then.jsonc'), '--', process.execPath, upstream]);
+    const { search_cases, delete_case } = JSON.parse(readFileSync(join(dir, 'then.schema.json'), 'utf8'))[
+      'x-mcp-authz-tools'
+    ];
     writeFileSync(
       join(dir, 'kept.schema.json'),
-      JSON.stringify({
-        definitions: { tool: { anyOf: [{ const: 'search_cases' }, { const: 'delete_case' }] } },
-      }),
+      JSON.stringify({ 'x-mcp-authz-tools': { search_cases, delete_case } }),
     );
 
     expect(await main(['tools', '--out', config, '--', process.execPath, upstream])).toBe(0);
@@ -406,7 +434,7 @@ describe('a saved wrap config', () => {
     // delete_case stays on because you turned it on; update_case is new, so off.
     expect(readWrapConfig(config).allow).toEqual(['delete_case', 'search_cases']);
     expect(readFileSync(config, 'utf8')).toContain('// "update_case",');
-    expect(out).toContain('1 new since last saved, left commented out');
+    expect(out).toContain('1 new and 0 changed since last saved, left commented out');
   });
 
   it('reads the file as a person leaves it: comments, // in strings, a trailing comma', () => {
@@ -424,13 +452,37 @@ describe('a saved wrap config', () => {
       ].join('\n'),
     );
 
-    expect(readWrapConfig(config)).toEqual({
+    expect(readWrapConfig(config, { record: false })).toEqual({
       command: 'npx',
       args: ['-y', 'https://x.dev//mcp'],
       // No cwd given: the config's own directory, never the client's.
       cwd: dir,
       allow: ['search_cases', 'delete_case'],
     });
+  });
+
+  it('refuses a name the record lacks, rather than hiding a typo at runtime', async () => {
+    const config = join(dir, 'typo-name.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    writeFileSync(config, readFileSync(config, 'utf8').replace('"search_cases",', '"serch_cases",'));
+
+    expect(() => readWrapConfig(config)).toThrow('"serch_cases" not in the record beside it');
+  });
+
+  it('refuses to run without its record, rather than filtering by name alone', async () => {
+    const config = join(dir, 'lost-record.jsonc');
+    await main(['tools', '--out', config, '--', process.execPath, upstream]);
+    rmSync(join(dir, 'lost-record.schema.json'));
+
+    expect(() => readWrapConfig(config)).toThrow('lost-record.schema.json: missing');
+    writeFileSync(join(dir, 'lost-record.schema.json'), '{"x-mcp-authz-tools": {"search_cases": "x"}}');
+    expect(() => readWrapConfig(config)).toThrow('the record for "search_cases" is not a definition');
+
+    // A refresh writes a new record, and with nothing to compare against,
+    // approves nothing on your behalf.
+    expect(await main(['tools', '--refresh', config])).toBe(0);
+    expect(readWrapConfig(config).allow).toEqual([]);
+    expect(out).toContain('no record to compare against');
   });
 
   it('names the file and the field when the config is wrong', () => {
@@ -443,7 +495,7 @@ describe('a saved wrap config', () => {
   it('writes a valid schema for a server with no tools, one that accepts no names', () => {
     const config = join(dir, 'empty.jsonc');
 
-    writeWrapConfig(config, { command: 'npx', args: [], cwd: dir }, []);
+    writeWrapConfig(config, { command: 'npx', args: [], cwd: dir }, { tools: [] });
 
     const schema = JSON.parse(readFileSync(join(dir, 'empty.schema.json'), 'utf8'));
     const validate = new Ajv({ strict: false }).compile(schema);
@@ -458,9 +510,9 @@ describe('a saved wrap config', () => {
     expect(() => readWrapConfig(config)).toThrow(`${config}: unknown key "alow"`);
   });
 
-  it('wrap --config takes the server from the file, so -- is not needed as well', () => {
-    expect(main(['wrap', '--config', 'x.jsonc', '--', 'npx', 'other'])).toBe(1);
-    expect(err).toContain('wrap takes --config or a command after --, not both.');
+  it('wrap <file> takes the server from the file, so -- is not needed as well', () => {
+    expect(main(['wrap', 'x.jsonc', '--', 'npx', 'other'])).toBe(1);
+    expect(err).toContain('wrap takes a config or a command after --, not both.');
   });
 
   const upstream = fileURLToPath(new URL('./__fixtures__/stdio-upstream.mjs', import.meta.url));
@@ -475,15 +527,17 @@ describe('a saved wrap config', () => {
       command: process.execPath,
       args: [upstream],
       cwd: process.cwd(),
-      allow: ['search_cases', 'update_case'],
+      // Only what the server marks read-only starts on: update_case says nothing.
+      allow: ['search_cases'],
+      pinned: expect.any(Map),
     });
     const text = readFileSync(config, 'utf8');
-    expect(text).toContain('// "delete_case", // destructive · Remove a case');
-    expect(text).toContain('"search_cases", // read-only · Find cases');
+    expect(text).toContain('// "delete_case", // destructive · ~');
+    expect(text).toContain('"search_cases", // read-only · ~');
     // Every entry ends in a comma, so uncommenting any line, as the file
     // invites, leaves it parseable.
     writeFileSync(config, text.replace('// "delete_case",', '"delete_case",'));
-    expect(readWrapConfig(config).allow).toEqual(['search_cases', 'update_case', 'delete_case']);
+    expect(readWrapConfig(config).allow).toEqual(['search_cases', 'delete_case']);
 
     // The schema lists every tool, so an editor completes names and flags typos.
     const schema = JSON.parse(readFileSync(join(dir, 'cases.schema.json'), 'utf8'));
@@ -507,13 +561,17 @@ describe('a saved wrap config', () => {
         t.description,
       ]),
     );
-    expect(described.update_case).toBe('unknown · Change a case\n\nTakes: id (required), title');
-    expect(described.search_cases).toBe('read-only · Find cases');
+    expect(described.update_case).toMatch(
+      /^unknown · ~\d+ tokens · Change a case\n\nTakes: id \(required\), title$/,
+    );
+    expect(described.search_cases).toMatch(/^read-only · ~\d+ tokens · Find cases$/);
+    // What the choice costs, so the big tools are the easy ones to spot.
+    expect(out).toMatch(/The model sees ~\d+ of ~\d+ tokens of tool definitions/);
 
     // The client entry names the config by absolute path: clients start
     // servers from a working directory nobody chose.
     expect(out).toContain('"cases": {');
-    expect(out).toContain(`"args": ["-y", "mcp-authz", "wrap", "--config", ${JSON.stringify(config)}]`);
+    expect(out).toContain(`"args": ["-y", "mcp-authz", "wrap", ${JSON.stringify(config)}]`);
   });
 });
 

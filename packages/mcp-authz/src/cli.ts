@@ -4,14 +4,22 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { definePolicy, reconcile, type Identity, type MatchedRule, type PolicySpec } from './policy';
-import { wrap } from './wrap';
+import {
+  changedFields,
+  INSTRUCTIONS,
+  missingDefinitions,
+  reveal,
+  suspicious,
+  type Definition,
+} from './definitions';
+import { formatTokens, wrap } from './wrap';
 import {
   clientEntry,
   discover as discoverTools,
   writeClientConfig,
   parseJsonc,
   readWrapConfig,
-  recordedTools,
+  recordedToolsIfAny,
   schemaPathFor,
   writeWrapConfig,
 } from './wrap-config';
@@ -42,10 +50,10 @@ const USAGE = `mcp-authz — inspect a policy without running a server
   mcp-authz explain <policy.json> --identity <identity.json>|- [--capabilities <map.json>]
   mcp-authz tools -- <command> [args...]
   mcp-authz tools --out <name.jsonc> [--client-out <mcp.json>] -- <command> [args...]
-  mcp-authz tools --config <name.jsonc> --refresh
-  mcp-authz wrap [--allow <a,b> | --deny <a,b>] -- <command> [args...]
-  mcp-authz wrap --config <name.jsonc>
   mcp-authz tools --check <name.jsonc>
+  mcp-authz tools --refresh <name.jsonc>
+  mcp-authz wrap <name.jsonc>
+  mcp-authz wrap [--allow <a,b> | --deny <a,b>] -- <command> [args...]
 
 Files
   <policy.json>     the object you would hand definePolicy
@@ -57,7 +65,8 @@ Files
 wrap
   Runs a stdio MCP server and hides tools from whoever connects. Put it in
   front of the server in your client's MCP config. With neither flag every
-  tool passes through; names are exact and comma-separated.
+  tool passes through; names are exact and comma-separated. For a remote
+  server, wrap the bridge: -- npx -y mcp-remote <url>
 
 Exit codes
   0  fine, warnings included
@@ -77,8 +86,7 @@ export function main(argv: readonly string[]): number | Promise<number> {
       check: { type: 'string' },
       allow: { type: 'string' },
       deny: { type: 'string' },
-      config: { type: 'string' },
-      refresh: { type: 'boolean' },
+      refresh: { type: 'string' },
       'client-out': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -89,6 +97,8 @@ export function main(argv: readonly string[]): number | Promise<number> {
   // included. Other commands keep the usual meaning: a path that starts with -.
   const dashes = argv.indexOf('--');
   const upstream = dashes === -1 ? [] : argv.slice(dashes + 1);
+  // parseArgs counts those as positionals too; `wrap <file>` wants only its own.
+  const [, ownPath] = positionals.slice(0, positionals.length - upstream.length);
   if (values.help || !command) {
     process.stdout.write(USAGE);
     return values.help ? 0 : 1;
@@ -97,7 +107,7 @@ export function main(argv: readonly string[]): number | Promise<number> {
     if (values.check) return checkWrapConfig(values.check, upstream);
     return listTools(upstream, values);
   }
-  if (command === 'wrap') return runWrap(upstream, values);
+  if (command === 'wrap') return runWrap(upstream, { ...values, config: ownPath });
   // `record` takes a module rather than a policy, so it branches before the
   // policy file is read.
   if (command === 'record') {
@@ -154,50 +164,93 @@ export function main(argv: readonly string[]): number | Promise<number> {
 
 /**
  * Print the names `wrap` takes, with the hints that help choose between them,
- * and with --out or --refresh save them as a config `wrap --config` runs.
+ * and with --out or --refresh save them as a config `wrap <file>` runs.
  */
 function listTools(
   upstream: readonly string[],
-  flags: { out?: string; config?: string; refresh?: boolean; 'client-out'?: string },
+  flags: { out?: string; refresh?: string; 'client-out'?: string },
 ): number | Promise<number> {
   const refuse = (message: string) => (process.stderr.write(`${message}\n`), 1);
-  if (flags.refresh && !flags.config) {
-    return refuse('--refresh rewrites a saved config: tools --config <name>.jsonc --refresh');
+  if (flags.refresh && upstream.length > 0) {
+    return refuse('tools --refresh reruns the server its config names, so it takes no command after --.');
   }
-  if (flags.config && upstream.length > 0) {
-    return refuse('tools takes --config or a command after --, not both: the config names its server.');
-  }
+  if (flags.refresh && flags.out) return refuse('tools takes --out or --refresh, not both.');
   // A saved config already holds the command, arguments and directory, so a
   // refresh reruns exactly what was saved rather than asking for it again.
-  const saved = flags.config ? readWrapConfig(flags.config) : undefined;
+  // Without its record: a refresh is how a missing or damaged one is replaced.
+  const saved = flags.refresh ? readWrapConfig(flags.refresh, { record: false }) : undefined;
   const [command, ...args] = saved ? [saved.command, ...saved.args] : upstream;
   const cwd = saved?.cwd ?? process.cwd();
-  if (saved) announce(saved, flags.config!);
+  if (saved) announce(saved, flags.refresh!);
   if (!command) {
     return refuse('tools needs the server command after --, e.g. tools -- npx -y some-mcp');
   }
-  const target = flags.refresh ? flags.config : flags.out;
-  return discover(command, args, cwd).then((tools) => {
-    if (tools === undefined) return 1;
+  const target = flags.refresh ?? flags.out;
+  return discover(command, args, cwd).then((discovered) => {
+    if (discovered === undefined) return 1;
+    const { tools, instructions } = discovered;
     const width = Math.max(...tools.map((tool) => tool.name.length));
-    for (const tool of tools) {
+    const cost = tools.map((tool) => `${formatTokens(tool.tokens)} tokens`);
+    const costWidth = Math.max(...cost.map((text) => text.length));
+    tools.forEach((tool, i) => {
       process.stdout.write(
-        `${tool.name.padEnd(width)}  ${tool.hint.padEnd(11)}  ${tool.description}`.trimEnd() + '\n',
+        `${tool.name.padEnd(width)}  ${tool.hint.padEnd(11)}  ${cost[i]!.padStart(costWidth)}  ${tool.description}`.trimEnd() +
+          '\n',
+      );
+    });
+    // On stderr, so a script reading the list gets only the list.
+    for (const tool of tools.filter((t) => t.warnings.length > 0)) {
+      process.stderr.write(
+        `⚠ ${tool.name} ${tool.warnings.join(' and ')}: read its definition before you allow it.\n`,
       );
     }
+    if (instructions !== undefined) {
+      process.stderr.write(
+        `\nThe server's instructions to the model, which wrap holds to this record:\n  ${reveal(instructions)}\n`,
+      );
+      for (const warning of suspicious({ instructions })) {
+        process.stderr.write(`⚠ the instructions ${warning}: read them before you use this server.\n`);
+      }
+    }
     if (!target) {
-      // On stderr, so a script reading the list gets only the list.
       process.stderr.write('\nSave these as a config wrap can run: tools --out <name>.jsonc -- ...\n');
       return 0;
     }
+    const recorded = existsSync(target) ? recordedToolsIfAny(target) : undefined;
+    // Saving is approving, and instructions have no line to leave commented
+    // out, so a change to them is shown here, word for word, before it is kept.
+    const approved = recorded?.get(INSTRUCTIONS) ?? {};
+    const live = instructions === undefined ? {} : { instructions };
+    if (recorded && changedFields(approved, live).length > 0) {
+      process.stderr.write(
+        [
+          '',
+          ...describeChange('server instructions', approved, live, 'recorded by this refresh').map((line) =>
+            line.replace('until you approve it', 'and approved by saving: read it'),
+          ),
+          '',
+        ].join('\n'),
+      );
+    }
     const previous = existsSync(target)
-      ? { options: readWrapConfig(target), recorded: recordedTools(target) }
+      ? { options: readWrapConfig(target, { record: false }), ...(recorded ? { recorded } : {}) }
       : undefined;
-    const { allowed, commented, added } = writeWrapConfig(target, { command, args, cwd }, tools, previous);
-    const summary = previous
-      ? `${allowed} allowed, ${commented} commented out, ${added} new since last saved, left commented out`
-      : `${allowed} allowed, ${commented} destructive commented out`;
-    const lines = ['', `Saved ${target} (${summary}) and ${schemaPathFor(target)}.`];
+    const { allowed, commented, added, changed, tokens } = writeWrapConfig(
+      target,
+      { command, args, cwd },
+      discovered,
+      previous,
+    );
+    const summary = !previous
+      ? `${allowed} read-only allowed, ${commented} commented out for you to choose`
+      : recorded
+        ? `${allowed} allowed, ${commented} commented out, ${added} new and ${changed} changed since last saved, left commented out`
+        : `no record to compare against, so all ${commented} commented out for you to approve again`;
+    const lines = [
+      '',
+      `Saved ${target} (${summary}) and ${schemaPathFor(target)}.`,
+      `The model sees ${formatTokens(tokens.allowed)} of ${formatTokens(tokens.total)} tokens of tool definitions.`,
+    ];
     if (flags['client-out']) {
       writeClientConfig(flags['client-out'], target);
       lines.push(`Added it to ${flags['client-out']}; give it the env the server needs there.`);
@@ -263,19 +316,35 @@ async function checkWrapConfig(path: string, upstream: readonly string[]): Promi
   }
   const options = readWrapConfig(path);
   announce(options, path);
-  const discovered = await discover(options.command, options.args, options.cwd);
-  if (discovered === undefined) return 1;
+  const found = await discover(options.command, options.args, options.cwd);
+  if (found === undefined) return 1;
+  const discovered = found.tools;
   const live = discovered.map((tool) => tool.name);
-  const recorded = recordedTools(path);
+  // readWrapConfig has already refused a config without a record.
+  const recorded = options.pinned!;
+  const recordedNames = [...recorded.keys()].filter((name) => name !== INSTRUCTIONS);
   const listed = options.allow ?? options.deny ?? [];
 
   const missing = listed.filter((name) => !live.includes(name));
-  const added = recorded ? live.filter((name) => !recorded.includes(name)) : [];
-  const removed = recorded ? recorded.filter((name) => !live.includes(name)) : [];
+  const added = live.filter((name) => !recorded.has(name));
+  const removed = recordedNames.filter((name) => !live.includes(name));
+  const changed = discovered.flatMap((tool) => {
+    const approved = recorded.get(tool.name);
+    const fields = approved ? changedFields(approved, tool.pin) : [];
+    return fields.length > 0 ? [{ name: tool.name, approved: approved!, live: tool.pin, fields }] : [];
+  });
+  const approvedInstructions = recorded.get(INSTRUCTIONS) ?? {};
+  const liveInstructions = found.instructions === undefined ? {} : { instructions: found.instructions };
+  const instructionsChanged = changedFields(approvedInstructions, liveInstructions).length > 0;
 
-  if (missing.length === 0 && added.length === 0 && removed.length === 0) {
-    const against = recorded ? `as recorded in ${schemaPathFor(path)}` : `every name in ${path} found`;
-    process.stdout.write(`${live.length} tools, ${against}\n`);
+  if (
+    missing.length === 0 &&
+    added.length === 0 &&
+    removed.length === 0 &&
+    changed.length === 0 &&
+    !instructionsChanged
+  ) {
+    process.stdout.write(`${live.length} tools, as recorded in ${schemaPathFor(path)}\n`);
     return 0;
   }
   const lines = [`${path} does not match the server:`, ''];
@@ -292,11 +361,20 @@ async function checkWrapConfig(path: string, upstream: readonly string[]): Promi
     );
   }
   for (const name of removed) lines.push(`  - ${name}`, '      recorded, but the server no longer offers it');
+  for (const tool of changed) {
+    const state = options.allow?.includes(tool.name) ? 'hidden by wrap' : 'not in use';
+    lines.push(...describeChange(tool.name, tool.approved, tool.live, state));
+  }
+  if (instructionsChanged) {
+    lines.push(
+      ...describeChange('server instructions', approvedInstructions, liveInstructions, 'removed by wrap'),
+    );
+  }
   lines.push(
     '',
     missing.length > 0
-      ? `Fix or remove the "?" names in ${path}, then run tools --config ${path} --refresh to record the rest.`
-      : `Run tools --config ${path} --refresh to record the change. Your choices are kept; new tools stay off.`,
+      ? `Fix or remove the "?" names in ${path}, then run tools --refresh ${path} to record the rest.`
+      : `Run tools --refresh ${path} to record the change. Your choices are kept; new and changed tools stay off until you switch them on.`,
     '',
   );
   process.stdout.write(lines.join('\n'));
@@ -310,9 +388,9 @@ function runWrap(
   const refuse = (message: string) => (process.stderr.write(`${message}\n`), 1);
   if (allow !== undefined && deny !== undefined) return refuse('wrap takes --allow or --deny, not both.');
   if (config !== undefined) {
-    if (upstream.length > 0) return refuse('wrap takes --config or a command after --, not both.');
+    if (upstream.length > 0) return refuse('wrap takes a config or a command after --, not both.');
     if (allow !== undefined || deny !== undefined) {
-      return refuse('wrap takes --config or --allow/--deny, not both: the list lives in the file.');
+      return refuse('wrap takes a config or --allow/--deny, not both: the list lives in the file.');
     }
   }
   const names = (list?: string) =>
@@ -322,7 +400,9 @@ function runWrap(
       .filter(Boolean);
   const [command, ...args] = upstream;
   if (config === undefined && !command) {
-    return refuse('wrap needs the server command after --, e.g. wrap --deny x -- npx -y some-mcp');
+    return refuse(
+      'wrap needs a config, e.g. wrap cases.jsonc, or the server command after --, e.g. wrap --deny x -- npx -y some-mcp',
+    );
   }
   // Reading the file can throw, with a message that names it and the field.
   const options = config
@@ -399,31 +479,43 @@ async function record(
  * is what lets a URL-only server be watched from CI at all.
  */
 async function drift(
-  live: { names: string[]; fingerprints: Record<string, string> },
+  live: { names: string[]; definitions: Record<string, Definition> },
   path: string,
 ): Promise<number> {
   const loaded = (await import(pathToFileURL(resolve(path)).href)) as {
     PERMISSIONS?: Record<string, string>;
-    FINGERPRINTS?: Record<string, string>;
+    DEFINITIONS?: Record<string, Definition>;
   };
   const priced = Object.keys(loaded.PERMISSIONS ?? {});
-  const recorded = loaded.FINGERPRINTS ?? {};
+  const recorded = new Map(Object.entries(loaded.DEFINITIONS ?? {}));
 
   const added = live.names.filter((name) => !priced.includes(name));
   const removed = priced.filter((name) => !live.names.includes(name));
-  const changed = live.names.filter(
-    (name) => priced.includes(name) && recorded[name] && recorded[name] !== live.fingerprints[name],
+  // The proxy refuses to boot without a definition for every priced
+  // capability, so a record with a gap is a failure here too, not a pass that
+  // checked less than it says.
+  const unrecorded = missingDefinitions(
+    priced.filter((name) => live.names.includes(name)),
+    recorded,
   );
+  const changed = live.names.filter(
+    (name) =>
+      priced.includes(name) &&
+      recorded.has(name) &&
+      changedFields(recorded.get(name)!, live.definitions[name]!).length > 0,
+  );
+  const approvedInstructions = recorded.get(INSTRUCTIONS) ?? {};
+  const liveInstructions = live.definitions[INSTRUCTIONS] ?? {};
+  const instructionsChanged = changedFields(approvedInstructions, liveInstructions).length > 0;
 
-  // A map with no baseline can still be checked for names, but not for a
-  // capability that changed under one. Silence there reads as a pass.
-  const unbaselined =
-    Object.keys(recorded).length === 0
-      ? ` — ${path} carries no FINGERPRINTS, so definitions were not compared; re-record to add one`
-      : '';
-
-  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
-    process.stdout.write(`${live.names.length} capabilities, names unchanged since ${path}${unbaselined}\n`);
+  if (
+    added.length === 0 &&
+    removed.length === 0 &&
+    changed.length === 0 &&
+    unrecorded.length === 0 &&
+    !instructionsChanged
+  ) {
+    process.stdout.write(`${live.names.length} capabilities, unchanged since ${path}\n`);
     return 0;
   }
 
@@ -432,12 +524,48 @@ async function drift(
     lines.push(`  + ${name}`, '      never priced, so nobody decided who may reach it');
   for (const name of removed)
     lines.push(`  - ${name}`, '      priced here, but the server no longer offers it');
-  for (const name of changed)
-    lines.push(`  ~ ${name}`, '      same name, different definition than the one recorded');
-  if (unbaselined) lines.push('', `Note:${unbaselined.slice(3)}`);
+  for (const name of unrecorded) {
+    lines.push(
+      `  ? ${name}`,
+      '      priced, but DEFINITIONS has no record of it, so a change would go unseen',
+    );
+  }
+  for (const name of changed) {
+    lines.push(
+      ...describeChange(name, recorded.get(name)!, live.definitions[name]!, 'hidden by createMcpProxy'),
+    );
+  }
+  if (instructionsChanged) {
+    lines.push(
+      ...describeChange(
+        'server instructions',
+        approvedInstructions,
+        liveInstructions,
+        'removed by createMcpProxy',
+      ),
+    );
+  }
   lines.push('', 'Re-record when the change is expected, and review the diff.', '');
   process.stdout.write(lines.join('\n'));
   return 1;
+}
+
+/**
+ * A changed definition, with the words themselves: a changed description is
+ * how a server steers the model, and "definition changed" alone gives you
+ * nothing to judge.
+ */
+function describeChange(name: string, recorded: Definition, live: Definition, state: string): string[] {
+  const fields = changedFields(recorded, live);
+  return [
+    `  ~ ${name}`,
+    `      ${fields.join(', ')} changed since recorded; ${state} until you approve it`,
+    ...fields.flatMap((field) => [
+      `      ${field} was: ${reveal(JSON.stringify(recorded[field]) ?? '(absent)')}`,
+      `      ${field} now: ${reveal(JSON.stringify(live[field]) ?? '(absent)')}`,
+    ]),
+    ...suspicious(live).map((warning) => `      ⚠ now ${warning}`),
+  ];
 }
 
 function check(

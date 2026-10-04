@@ -9,6 +9,9 @@
 //   launcher  starts a stubborn server and waits on it, the way npx does, and
 //             reports the server's pid on stderr
 //   launcher-exit  as launcher, then exits itself, leaving the server running
+//   ref       lists a tool whose inputSchema is a remote $ref
+//   paged     a 2026-07-28 server that lists its tools over two pages and wants
+//             protocol _meta on every request
 import process from 'node:process';
 import { setInterval } from 'node:timers';
 import { spawn } from 'node:child_process';
@@ -43,6 +46,33 @@ if (mode === 'launcher' || mode === 'launcher-exit') {
       return;
     }
     const { id, method } = message;
+    if (mode === 'ref') {
+      // A tool whose schema points at a URL: a validator that followed it would
+      // fetch from the network, and one that cannot must still answer.
+      const tool = {
+        name: 'fetch_report',
+        inputSchema: { $ref: 'http://169.254.169.254/latest/meta-data/schema.json' },
+      };
+      if (method === 'tools/list') send({ id, result: { tools: [tool] } });
+      if (method === 'tools/call') send({ id, result: { content: [{ type: 'text', text: 'ran' }] } });
+      return;
+    }
+    if (mode === 'paged') {
+      // A 2026-07-28 server: every request carries its protocol version, the
+      // second page of a listing as much as the first.
+      if (!message.params?._meta?.['io.modelcontextprotocol/protocolVersion']) {
+        send({ id, error: { code: -32602, message: 'missing protocol _meta' } });
+      } else if (method === 'tools/list') {
+        const tool = message.params.cursor ? 'update_case' : 'search_cases';
+        send({
+          id,
+          result: { tools: [{ name: tool }], ...(message.params.cursor ? {} : { nextCursor: 'two' }) },
+        });
+      } else if (method === 'tools/call') {
+        send({ id, result: { content: [{ type: 'text', text: `${message.params.name} done` }] } });
+      }
+      return;
+    }
     if (method === 'tools/list') {
       if (mode === 'collide') send({ id, method: 'roots/list' });
       // A description may carry U+2028, which JSON.stringify leaves unescaped.

@@ -11,6 +11,7 @@ from mcp_authz import (
     define_policy,
     scopes_for_capability,
 )
+from mcp_authz.definitions import changed_fields
 
 CONFORMANCE = Path(__file__).parents[3] / "conformance" / "v1"
 
@@ -135,3 +136,8 @@ def test_non_post_routing_headers_stay_untrusted() -> None:
     assert route.kind == "legacy"
     assert route.method is None
     assert route.name is None
+
+
+def test_definition_drift() -> None:
+    for case in fixture("definitions.json")["cases"]:
+        assert changed_fields(case["recorded"], case["live"]) == case["expected"], case["name"]

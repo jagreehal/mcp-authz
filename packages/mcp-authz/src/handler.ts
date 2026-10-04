@@ -127,7 +127,11 @@ export type McpFetchOptions<TContext, P extends string = string> = {
     permissions?: ReadonlyMap<string, string>;
     /** Protocol route to permission, used to distinguish policy denial from scope step-up. */
     routePermissions?: ReadonlyMap<string, string>;
-    routeNameFor?: (kind: 'tool' | 'prompt' | 'resource', name: string) => string | undefined;
+    /** Every registration a concrete request name reaches, so overlapping ones are all enforced. */
+    routesFor?: (
+      kind: 'tool' | 'prompt' | 'resource',
+      name: string,
+    ) => readonly { routeName: string; permission: string }[];
     /** Resolve exact and templated protocol routes to their declared permission. */
     permissionForRoute?: (kind: 'tool' | 'prompt' | 'resource', name: string) => string | undefined;
   };
@@ -382,6 +386,10 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
     }
 
     const scoped = Boolean(scopeMap || scopesForRequest);
+    const resourceRoutes = (route: TrustedMcpRoute) =>
+      route.method === 'resources/read' && route.name
+        ? (createServer.routesFor?.('resource', route.name) ?? [])
+        : [];
     const routed = Boolean(createServer.permissionForRoute ?? createServer.routePermissions);
     const gateResult = await runScopedGate({
       request,
@@ -392,16 +400,31 @@ export function createMcpFetch<TContext = Principal<string>, P extends string = 
       scoped,
       routed,
       scopeMap,
+      // A read carries a URI, and an exact resource and a template can both
+      // cover it. The SDK runs the exact one whatever the registration order,
+      // so rather than guess, every match has to be satisfied: each scope is
+      // demanded and the first unmet permission is the one reported, as the
+      // proxy does for an upstream it cannot see into.
       resolveCapabilityScopes: (route) => {
-        if (route.method !== 'resources/read' || !route.name || !scopeMap) return undefined;
-        const registered = createServer.routeNameFor?.('resource', route.name);
-        return registered === undefined
-          ? undefined
-          : scopesForCapability(route.method, registered, scopeMap, requiredScopes[0] ?? 'mcp');
+        const matches = resourceRoutes(route);
+        if (matches.length === 0 || !scopeMap) return undefined;
+        return [
+          ...new Set(
+            matches.flatMap((match) =>
+              scopesForCapability(route.method, match.routeName, scopeMap, requiredScopes[0] ?? 'mcp'),
+            ),
+          ),
+        ];
       },
       scopesForRequest,
-      resolvePermission: (route) =>
-        permissionForRoute(createServer.permissionForRoute, createServer.routePermissions, route),
+      resolvePermission: (route) => {
+        const matches = resourceRoutes(route);
+        if (matches.length === 0) {
+          return permissionForRoute(createServer.permissionForRoute, createServer.routePermissions, route);
+        }
+        return (matches.find((match) => principal && !principal.can(match.permission as P)) ?? matches[0])
+          ?.permission;
+      },
       onDecision: options.onDecision,
       ...(emitter ? { emitter } : {}),
       resourceMetadataUrl,

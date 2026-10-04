@@ -566,10 +566,10 @@ reads it off the server instead.
 ```ts
 import { recordCapabilities, toPermissionsModule } from 'mcp-authz/testing';
 
-const { names, fingerprints } = await recordCapabilities(() => buildServer(TEST_CONFIG));
+const { names, definitions } = await recordCapabilities(() => buildServer(TEST_CONFIG));
 
 expect(names).toEqual(Object.keys(PERMISSIONS).sort());
-expect(fingerprints).toMatchSnapshot();
+expect(definitions).toMatchSnapshot();
 ```
 
 It builds your server, connects a client over an in-memory transport, and lists
@@ -585,12 +585,13 @@ a person has decided what each one costs. Permissions are never guessed from
 decisions must not be made from them.
 
 `gate()` already refuses to start on a capability with no price, which covers a
-dependency that adds a tool. `fingerprints` covers the one it cannot see — a
+dependency that adds a tool. `definitions` covers the one it cannot see — a
 capability that keeps its name while its description, input schema, prompt
-arguments or URI template change underneath. Each digests the whole definition
-as served, so a snapshot turns that into a diff on the pull request. Nothing is
-enforced at boot: a digest in production is a second source of truth, and would
-make a description edit an outage.
+arguments or URI template change underneath. Each holds the whole definition as
+served (key order sorted, `_meta` and `icons` left out), so a snapshot turns that
+into a diff of the exact words on the pull request. With `gate()` in your own
+server, that snapshot is the check; `createMcpProxy` enforces the same record at
+runtime.
 
 ### `mcp-authz/openapi` — the same bet on an HTTP API
 
@@ -655,6 +656,7 @@ export default createMcpProxy({
   verifier: { jwksUri: process.env.OAUTH_JWKS_URI! },
   policy,
   permissions: PERMISSIONS, // from recordUpstream → toPermissionsModule
+  definitions: DEFINITIONS, // same module; what each capability said when recorded
   resourceUris: RESOURCE_URIS, // same module; a read names a URI, not a label
   upstream: {
     url: process.env.UPSTREAM_URL!,
@@ -663,15 +665,44 @@ export default createMcpProxy({
 });
 ```
 
-Record the upstream with `recordUpstream` or `mcp-authz record --upstream`, price
-the map, deploy the proxy.
+Record the upstream with `recordUpstream` or `mcp-authz record --upstream`, which
+connect as a 2026-07-28 client, price the map, deploy the proxy. `record --check`
+exits 1 when the upstream drifts, when its instructions change, and when a priced
+capability has no entry in `DEFINITIONS`.
+
+The proxy speaks MCP 2026-07-28 only: anything but a POST is a 405, and a
+request without validated `Mcp-Method` and `Mcp-Name` routing headers is a 400.
+Clients that still open with the 2025 `initialize` handshake cannot use it.
+
+`definitions` is required, and the proxy refuses to boot if a priced label has
+none. An upstream can keep a name you approved and rewrite the description to
+steer the model, or add an argument to carry data out. So a capability whose
+definition differs from the record is left out of listings, with a
+`console.warn` naming it and the changed fields. A call to a capability not
+checked in the last 60 seconds makes the proxy list the upstream itself first;
+one that changed or is no longer listed is refused with a 403. The upstream's
+instructions are held to `DEFINITIONS['server:instructions']` and removed when
+they differ. Re-recording is how a change is approved. This catches a change in
+what the model is told; it does not prove a remote tool behaves as it did, or
+that its output is free of prompt injection.
 
 The proxy is stricter than embed mode, because nothing downstream of it re-checks
 anything and it forwards on a service credential that outranks the caller.
-Routing headers that disagree with the body are refused rather than forwarded; a
-request with no routing headers is authorized from the body, which is what the
-upstream will act on; and a capability the map does not price is refused outright.
-The caller's `Authorization` and `Cookie` stay at the edge.
+Methods are on an explicit list: listings, `server/discover`, `ping` and two
+notifications pass; calls, prompt gets and reads are priced; a
+`completion/complete` is priced as the prompt or resource it completes, and a
+`subscriptions/listen` as a read of each URI it names, scopes included; anything else is a 400
+with `-32601`. Routing headers that disagree with the body, and a body that
+repeats a JSON key, are refused rather than forwarded. A read must satisfy every
+priced resource covering its URI. A capability the map does not price is refused
+outright. Filtered listings are marked private and `no-store`.
+A `tools/call` whose arguments break the recorded `inputSchema` is a 400.
+Answers are screened: `structuredContent` that breaks the recorded
+`outputSchema` is withheld, and output carrying invisible characters or text
+addressed to the model arrives after a notice to treat it as data. That notice
+is not a guarantee, and nothing verifies what a remote tool actually does; keep
+the service credential to least privilege. The caller's
+`Authorization` and `Cookie` stay at the edge.
 
 See [proxy mode](https://jagreehal.github.io/mcp-authz/typescript/proxy/) and the
 [`proxy-example`](../../apps/proxy-example) app.
@@ -871,25 +902,43 @@ npx -y mcp-authz tools --out cases.jsonc -- npx -y @acme/cases-mcp
 ```
 
 `tools` saves the server's tools to `cases.jsonc`, one line each with what the
-tool does and what the server says about it, destructive ones commented out.
-A schema beside it gives your editor completion and typo checks. `tools` also
+tool does, what the server says about it and roughly how many tokens its
+definition costs the model. Only tools the server marks read-only start switched
+on; destructive, unknown and flagged ones start commented out, and a tool that
+claims both read-only and destructive counts as destructive. The marks are the
+server's claims, shown to help you choose, not an approval.
+A schema beside it gives your editor completion and typo checks, and records
+each tool's definition and the server's instructions; `wrap` will not start
+without it. `tools` also
 prints the `mcpServers` entry to paste, or writes it into a client config file
 with `--client-out .mcp.json`:
 
 ```json
 "cases": {
   "command": "npx",
-  "args": ["-y", "mcp-authz", "wrap", "--config", "/Users/you/mcp/cases.jsonc"],
+  "args": ["-y", "mcp-authz", "wrap", "/Users/you/mcp/cases.jsonc"],
   "env": { "CASES_API_KEY": "..." }
 }
 ```
 
 `wrap` drops unlisted tools from `tools/list` and answers a call to one with an
 error that names it, so the server never receives it. Tools the server adds
-later stay hidden until you list them. `mcp-authz tools --check cases.jsonc` reports
-what changed on the server since you saved, and `tools --config cases.jsonc
---refresh` records it, keeping your choices. For a quick trial, `wrap --deny
-a,b -- <command>` takes the list as arguments.
+later stay hidden until you list them. So does a tool whose description or
+schema has changed since you saved it, which stops a rug pull: a server can't
+keep an approved name and rewrite what it tells the model. A call to a tool
+`wrap` has not yet checked waits while `wrap` lists the server itself, so a
+client that calls without listing cannot skip the check, and a
+`list_changed` from the server means every tool is checked again. Instructions
+that differ from the record are removed from the server's reply. Arguments that
+break the recorded `inputSchema` are refused, `structuredContent` that breaks
+the `outputSchema` is withheld, and output carrying text addressed to the model
+arrives after a notice to treat it as data. The notice catches only obvious
+injections, and nothing checks what a tool actually does.
+`mcp-authz tools --check cases.jsonc` reports
+what changed on the server since you saved, and `tools --refresh cases.jsonc`
+records it, keeping your choices. For a quick trial, `wrap --deny
+a,b -- <command>` takes the list as arguments. For a remote server, wrap the
+bridge: `-- npx -y mcp-remote https://…`.
 
 `wrap` limits one session; scope the key itself where the service supports it.
 When the client disconnects, `wrap` stops the whole process tree, `npx` and the

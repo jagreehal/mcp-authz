@@ -24,6 +24,8 @@ jobs:
               - 'packages/mcp-authz-python/**'
               - 'apps/python-example/**'
               - 'conformance/**'
+              - 'packages/mcp-authz/src/**'
+              - 'apps/test-server/**'
               - '.github/workflows/ci.yml'
 
   quality:
@@ -78,8 +80,19 @@ jobs:
         working-directory: packages/mcp-authz-python
       - run: uv run mypy src tests
         working-directory: packages/mcp-authz-python
+      # The cross-language test records the test server with the TypeScript
+      # CLI and holds the Python proxy to that record.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter mcp-authz build
       - run: uv run pytest
         working-directory: packages/mcp-authz-python
+        env:
+          MCP_AUTHZ_CROSS_LANGUAGE: '1'
       - run: uv build
         working-directory: packages/mcp-authz-python
       - run: uv run --no-project python scripts/smoke-python-package.py

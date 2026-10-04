@@ -8,6 +8,7 @@ import { emitDecision, type AuthorizationDecisionEvent } from './decision';
 import { classifyScopedRequest } from './routing';
 import { scopesForCapability, scopesFromMcpHeaders, type CapabilityScopeMap } from './scopes';
 import { authz, type AuditEvent } from './tools';
+import { changedFields, definitionOf } from './definitions';
 import { z } from 'zod';
 
 type DecisionFixtures = {
@@ -223,5 +224,20 @@ describe('the cross-language event contract', () => {
     expect(decision.type).toBe(events.decision.type);
     expect(wireKeys(decision)).toEqual(expect.arrayContaining(events.decision.required));
     expect(wireKeys(decision).filter((key) => !events.decision.keys.includes(key))).toEqual([]);
+  });
+});
+
+describe('definition drift fixtures', () => {
+  const fixtures = fixture<{
+    cases: {
+      name: string;
+      recorded: Record<string, unknown>;
+      live: Record<string, unknown>;
+      expected: string[];
+    }[];
+  }>('definitions.json');
+
+  it.each(fixtures.cases)('$name', ({ recorded, live, expected }) => {
+    expect(changedFields(definitionOf(recorded), definitionOf(live))).toEqual(expected);
   });
 });

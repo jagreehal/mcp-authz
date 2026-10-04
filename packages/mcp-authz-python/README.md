@@ -408,6 +408,7 @@ app = McpProxy(
     policy=policy,
     token_verifier=JwtVerifier(issuer=..., jwks_uri=..., resource="https://mcp.acme.com/mcp"),
     permissions=PERMISSIONS,      # {"get_case": "cases:read", "resource:cases": "cases:read", ...}
+    definitions=DEFINITIONS,      # {"get_case": {"name": "get_case", "description": ...}, ...}
     resource_uris=RESOURCE_URIS,  # {"resource:cases": "cases://all", ...}
     authorization_servers=["https://auth.acme.com"],
     on_decision=lambda event: log.warning("access", extra=event.to_dict()),
@@ -418,12 +419,23 @@ It is an ASGI app: run it under uvicorn, or mount it in whatever already serves
 your other routes.
 
 **Nothing downstream re-checks anything.** The upstream is reached with one
-service credential that outranks every caller, so this fails closed three ways
+service credential that outranks every caller, so this fails closed in ways
 the in-process seams do not have to:
 
+- it speaks MCP `2026-07-28` and nothing else. A request without its routing
+  headers and `_meta` envelope is refused, and so is any HTTP method but `POST`
+  (`405`)
 - a request whose routing headers disagree with its body is refused, not
   forwarded — one of the two is lying about what it does, and neither answer can
   be trusted over the other
+- a body that repeats a key in one object is refused with `-32600`. Two parsers
+  can read it as two different requests, and the one this priced might not be
+  the one the upstream runs
+- only methods it knows how to price are forwarded: `server/discover`, `ping`,
+  the four listings, `tools/call`, `prompts/get`, `resources/read`,
+  `completion/complete` and `subscriptions/listen`, plus the
+  `notifications/cancelled` and `notifications/progress` notifications. Anything
+  else is answered `-32601` here and never reaches the upstream
 - an invocation the permission map does not price is refused, so a tool the
   upstream added after the map was written inherits nothing
 - a catalogue this cannot read — wrong content type, over the byte cap,
@@ -433,6 +445,68 @@ the in-process seams do not have to:
 Listings are filtered on the way back, over JSON and over SSE, event by event as
 they arrive rather than buffered: the body is an upstream's to size, and holding
 it whole would let that upstream decide how much memory this process spends.
+A filtered listing is one caller's view, so it goes out with
+`cacheScope: "private"` and `Cache-Control: private, no-store`, and without the
+upstream's `ETag` or `Last-Modified`, whatever the upstream said about its own.
+
+A completion and a subscription reach a capability as surely as a call does,
+so each is priced as the call it stands in for. `completion/complete` on a
+`ref/prompt` needs what `prompts/get` of that prompt needs; on a `ref/resource`
+it needs what reading that URI needs, and a URI template has to be one of the
+priced templates exactly. Every URI in a `subscriptions/listen`
+`resourceSubscriptions` is priced as a read, and all of them have to pass. Any
+other kind of reference is refused.
+
+### Definitions: a name is not consent
+
+A permission prices a name, and the upstream decides what stands behind it. It
+can keep an approved tool's name and rewrite its description to steer the
+model, or add an argument to carry data out. So `definitions` is required: what
+each priced capability said when it was approved, keyed by the same labels as
+the permission map, with server instructions under `server:instructions` as
+`{"instructions": "..."}`. A priced capability with no recorded definition fails
+at construction.
+
+A definition is the listed item as the upstream sends it, less `_meta` and
+`icons`, which servers stamp per build and the model does not read. Key order
+does not count; every other field does, so the next field the spec adds is
+covered by default.
+
+- a listed tool, prompt, resource or template whose definition differs is left
+  out of the listing, before permissions are consulted, and a warning names the
+  fields that changed
+- a call is held until the proxy has seen that capability's live definition.
+  A client may call without listing first, so when it has not, the proxy reads
+  the upstream's whole catalogue itself on the service credential, one read at
+  a time however many callers are waiting, and refuses a capability that
+  changed or that the upstream no longer lists. A definition it has seen is
+  trusted for 60 seconds, then checked again
+- `server/discover` instructions that differ from the record, or that nobody
+  recorded, are taken out of the result
+
+The record is held to calls as well as listings. A `tools/call` whose
+`arguments` do not satisfy the recorded `inputSchema` (draft 2020-12 unless the
+schema names another in `$schema`) is refused with `400` and `-32602`
+`Invalid params`, before the upstream sees it. On the way back, a successful result whose
+`structuredContent` breaks the recorded `outputSchema`, or leaves it out, is
+withheld and replaced with an `isError` result saying so. The schema describes
+success, so an error result keeps its structured diagnostics. A
+result with invisible characters or wording addressed to the model anywhere in
+it, embedded resources included, is passed through unchanged with a warning
+prepended to its `content`: the data is the caller's, and the warning is for the
+model reading it.
+
+Numbers are read exactly, never rounded through a float, so `9007199254740993e0`
+is checked as the number an upstream parsing exactly will act on. An answer
+nothing changed is forwarded as the upstream's own bytes; one with a notice
+added keeps every number as it was written.
+
+A `$ref` resolves inside the recorded schema and nowhere else: nothing is ever
+fetched, so a definition cannot point this process at your network. A schema
+that cannot be checked, an outside `$ref` or an invalid schema, refuses the call
+or withholds the result rather than letting it through. Screening holds a result
+whole, so a tool result may be up to 16 MiB, or `max_request_bytes` if that is
+larger, before it is withheld.
 
 `resources/read` names a URI on the wire and a label in the permission map, so
 `resource_uris` maps each priced `resource:` label to the URI or template it

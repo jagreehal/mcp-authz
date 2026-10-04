@@ -23,6 +23,9 @@ Current fixture groups:
 - `audit/events.json`: the two records both packages emit, by type string and
   JSON key. A deployment running both languages holds them in one store for
   years, so a renamed key is a broken query rather than a detail.
+- `definitions.json`: which fields of a recorded definition count as changed.
+  Key order alone is no change, and `_meta` and `icons` are not recorded, so
+  both packages compare a record with a live listing the same way.
 
 Each language package owns its implementation and native tooling. The fixtures
 are the seam: both packages read these files rather than copying the behaviour

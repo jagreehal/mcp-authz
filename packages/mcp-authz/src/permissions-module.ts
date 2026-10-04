@@ -1,3 +1,5 @@
+import { INSTRUCTIONS } from './definitions';
+
 /**
  * Rendering a permission map as source, shared by everything that records a
  * catalogue.
@@ -10,8 +12,8 @@
 export type PermissionMapRecord = {
   /** Every capability, sorted, labelled the way the gate labels it. */
   names: string[];
-  /** A digest per capability, when the source can produce one. */
-  fingerprints?: Record<string, string>;
+  /** What each capability says to the model, when the source can record it. */
+  definitions?: Record<string, unknown>;
   /** `resource:` labels to the URI or template each answers on. */
   resourceUris?: Record<string, string>;
 };
@@ -38,28 +40,45 @@ export function toPermissionsModule(record: PermissionMapRecord): string {
     '} as const;',
     '',
     'export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];',
-    ...fingerprintLines(record),
+    ...definitionLines(record),
     ...resourceUriLines(record.resourceUris ?? {}),
     '',
   ].join('\n');
 }
 
 /**
- * Only emitted when the recorder could produce digests. An OpenAPI document is
+ * Only emitted when the recorder could read definitions. An OpenAPI document is
  * already a file in the repository, diffed on the pull request by whoever
- * changed it, so there is nothing for a second baseline to catch.
+ * changed it, so there is nothing for a second record to catch.
+ *
+ * Written out in full rather than as digests, so re-recording shows in review
+ * the exact words a server changed, and so `createMcpProxy` can compare without
+ * hashing on every listing.
  */
-function fingerprintLines(record: PermissionMapRecord): string[] {
-  const fingerprints = record.fingerprints ?? {};
-  if (Object.keys(fingerprints).length === 0) return [];
+function definitionLines(record: PermissionMapRecord): string[] {
+  const definitions = record.definitions ?? {};
+  if (Object.keys(definitions).length === 0) return [];
   return [
     '',
-    '// What each capability looked like when this was recorded. A separate export',
-    '// because gate() takes the flat map above; this is the baseline CI compares.',
-    'export const FINGERPRINTS = {',
-    ...record.names.map((label) => `  ${quote(label)}: ${literal(fingerprints[label] ?? '')},`),
-    '} as const;',
+    '// What each capability said to the model when this was recorded. createMcpProxy()',
+    '// hides one that no longer matches, so a server cannot keep an approved name and',
+    '// change what it tells the model. Re-record to approve a change.',
+    'export const DEFINITIONS = {',
+    ...record.names.map((label) => `  ${quote(label)}: ${value(definitions[label] ?? {})},`),
+    // The server's own instructions, when it gives any: they reach the model too.
+    ...(definitions[INSTRUCTIONS] ? [`  ${quote(INSTRUCTIONS)}: ${value(definitions[INSTRUCTIONS])},`] : []),
+    '};',
   ];
+}
+
+/**
+ * JSON is a valid object literal except for one key: `"__proto__"` sets the
+ * prototype there, dropping that part of a schema. A definition carrying one is
+ * written as a parse of its JSON instead, which keeps it.
+ */
+function value(definition: unknown): string {
+  const json = JSON.stringify(definition, null, 2).replace(/\n/g, '\n  ');
+  return json.includes('"__proto__"') ? `JSON.parse(${literal(JSON.stringify(definition))})` : json;
 }
 
 /**

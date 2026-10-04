@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import type { JSONRPCMessage, Transport } from '@modelcontextprotocol/client';
 import { story } from 'executable-stories-vitest';
-import { afterEach, describe, expect, it } from 'vitest';
-import { wrap } from './wrap';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { wrap, type WrapOptions } from './wrap';
 
 /**
  * `wrap` in front of a real stdio server, driven by a real SDK client. The only
@@ -49,7 +49,7 @@ afterEach(async () => {
   }
 });
 
-async function connect(filter: { allow?: string[]; deny?: string[] }) {
+async function connect(filter: Pick<WrapOptions, 'allow' | 'deny' | 'pinned'>) {
   const toWrap = new PassThrough();
   const fromWrap = new PassThrough();
   let log = '';
@@ -109,8 +109,147 @@ describe('wrap', () => {
     expect(tools.map((t) => t.name)).toEqual(['search_cases']);
 
     story.and('stderr says what was hidden, and that one name matched nothing');
-    expect(log()).toContain('mcp-authz wrap: 1/3 tools exposed, hidden: delete_case, update_case');
+    expect(log()).toMatch(
+      /mcp-authz wrap: 1\/3 tools exposed \(~\d+ of ~\d+ tokens\), hidden: delete_case, update_case/,
+    );
     expect(log()).toContain('mcp-authz wrap: no tool named serch_cases');
+  });
+
+  it('with recorded definitions, hides an allowed tool the record never saw', async ({ task }) => {
+    story.init(task, { tags: ['wrap', 'security'], covers: ['src/wrap.ts'] });
+
+    story.given('an allow list naming update_case, and a record that predates it');
+    const { client, log } = await connect({
+      allow: ['search_cases', 'update_case'],
+      pinned: new Map([
+        [
+          'search_cases',
+          { name: 'search_cases', description: 'Find cases', annotations: { readOnlyHint: true } },
+        ],
+      ]),
+    });
+
+    story.when('the client lists tools');
+    const names = (await client.listTools()).tools.map((t) => t.name);
+
+    story.then('only the tool whose definition was approved is shown');
+    // search_cases's pin omits inputSchema, which the server sends, so it
+    // too reads as changed: a pin covers every field the model reads.
+    expect(names).toEqual([]);
+    expect(log()).toContain('hid update_case: it was not offered when you approved this list');
+    expect(log()).toContain('hid search_cases: its inputSchema changed since you approved it');
+  });
+
+  it('checks a definition before a call made without listing first', async ({ task }) => {
+    story.init(task, { tags: ['wrap', 'security'], covers: ['src/wrap.ts'] });
+
+    story.given('search_cases approved as something other than what the server now says');
+    const { client, log } = await connect({
+      allow: ['search_cases', 'update_case'],
+      pinned: new Map([
+        ['search_cases', { name: 'search_cases', description: 'Approved words' }],
+        ['update_case', { name: 'update_case' }],
+      ]),
+    });
+
+    story.when('the client calls it without ever listing');
+    const refused = client.callTool({ name: 'search_cases', arguments: {} });
+
+    story.then('wrap lists the server itself, refuses the call, and the server never runs it');
+    await expect(refused).rejects.toThrow(/search_cases.*description.*changed since you approved it/);
+    expect(log()).not.toContain('upstream ran search_cases');
+  });
+
+  it('checks a tool on the second page of a modern server, keeping the protocol fields', async ({ task }) => {
+    story.init(task, { tags: ['wrap', 'security'], covers: ['src/wrap.ts'] });
+
+    story.given('a server that lists update_case on page two and wants _meta on every request');
+    const output = new PassThrough();
+    const input = new PassThrough();
+    const answers: string[] = [];
+    output.on('data', (chunk: Buffer) => answers.push(...chunk.toString('utf8').split('\n').filter(Boolean)));
+    const exited = wrap(
+      {
+        command: process.execPath,
+        args: [RAW, 'paged'],
+        allow: ['search_cases', 'update_case'],
+        pinned: new Map([
+          ['search_cases', { name: 'search_cases' }],
+          ['update_case', { name: 'update_case' }],
+        ]),
+      },
+      { input, output, log: () => {} },
+    );
+
+    story.when('the client calls update_case straight away');
+    const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' };
+    input.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'update_case', arguments: {}, _meta: meta } })}\n`,
+    );
+
+    story.then('wrap reads both pages, finds it unchanged, and the call runs');
+    await vi.waitFor(() => expect(answers.join('\n')).toContain('update_case done'));
+    input.end();
+    await exited;
+  });
+
+  it('answers a call whose recorded schema cannot be checked, and keeps running', async ({ task }) => {
+    story.init(task, { tags: ['wrap', 'security'], covers: ['src/wrap.ts', 'src/screen.ts'] });
+    const output = new PassThrough();
+    const input = new PassThrough();
+    const answers: string[] = [];
+    output.on('data', (chunk: Buffer) => answers.push(...chunk.toString('utf8').split('\n').filter(Boolean)));
+    const definition = {
+      name: 'fetch_report',
+      inputSchema: { $ref: 'http://169.254.169.254/latest/meta-data/schema.json' },
+    };
+    const exited = wrap(
+      {
+        command: process.execPath,
+        args: [RAW, 'ref'],
+        allow: ['fetch_report'],
+        pinned: new Map([['fetch_report', definition]]),
+      },
+      { input, output, log: () => {} },
+    );
+
+    story.when('the client calls the tool, then pings');
+    input.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fetch_report', arguments: {} } })}\n`,
+    );
+
+    story.then('the call is refused with a reason, and wrap is still there to answer');
+    await vi.waitFor(() => expect(answers.join('\n')).toContain('the recorded schema could not be checked'));
+    input.end();
+    await exited;
+  });
+
+  it('refuses a request whose id it could not match to the answer', async ({ task }) => {
+    story.init(task, { tags: ['wrap', 'security'], covers: ['src/wrap.ts'] });
+    const output = new PassThrough();
+    const input = new PassThrough();
+    let answered = '';
+    let log = '';
+    output.on('data', (chunk: Buffer) => (answered += chunk.toString('utf8')));
+    const exited = wrap(
+      { command: process.execPath, args: [UPSTREAM], deny: ['delete_case'] },
+      { input, output, log: (line) => (log += `${line}\n`) },
+    );
+
+    story.when('a listing and a call carry an id past 2^53');
+    input.write('{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/list","params":{}}\n');
+    input.write(
+      '{"jsonrpc":"2.0","id":9007199254740995,"method":"tools/call","params":{"name":"search_cases","arguments":{}}}\n',
+    );
+
+    story.then('both are refused, with the id echoed exactly, and neither reaches the server');
+    await vi.waitFor(() => expect(answered).toContain('"id":9007199254740995'));
+    expect(answered).toContain('"id":9007199254740993,"error"');
+    expect(answered).toContain('cannot track an id it cannot hold exactly');
+    expect(answered).not.toContain('delete_case');
+    expect(log).not.toContain('upstream ran');
+    input.end();
+    await exited;
   });
 
   it('exits non-zero, saying why, when the upstream cannot start', async ({ task }) => {
