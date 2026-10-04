@@ -28,6 +28,11 @@ dependencies = [
     # this adds nothing to an install. Named rather than borrowed: a dependency
     # you rely on is one you declare.
     "httpx2>=2.5.0,<3",
+    # Arguments and output are checked against the recorded schemas. The MCP
+    # SDK already depends on it.
+    "jsonschema>=4.20.0,<5",
+    # Its registry is how `$ref` is kept from fetching anything.
+    "referencing>=0.28",
 ]
 
 [project.urls]
@@ -65,3 +70,7 @@ select = ["B", "C4", "E", "F", "I", "N", "UP"]
 python_version = "3.10"
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true

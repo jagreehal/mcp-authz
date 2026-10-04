@@ -333,7 +333,7 @@ Tags: `e2e`, `gate`
 Tags: `journey`, `wrap`
 
 - **Given** a person saves a server's tools and their client entry
-- **And** switches update_case off by commenting out its line
+- **And** leaves update_case off, as it starts: the server does not say it is read-only
 - **When** their client starts the server from the entry it was given
 - **Then** update_case is not listed, and calling it is refused
 - **And** the server is upgraded and gains a tool
@@ -341,6 +341,18 @@ Tags: `journey`, `wrap`
 - **And** they refresh
 - **And** their choice survives, the new tool arrives switched off, and check passes
 - **And** the client still sees only what they chose
+
+### ✅ a rug pull: an approved tool changes its description, and loses its place until reviewed
+
+Tags: `journey`, `security`, `wrap`
+
+- **Given** a person approves search_cases as "Find cases"
+- **And** switches update_case on as well
+- **When** the server, under the same name, starts telling the model to read an SSH key
+- **Then** the model never sees the new description, and a call is refused
+- **And** tools --check shows the words that changed
+- **And** they refresh without reading it
+- **And** the changed tool is recorded but switched off, so approving it is a deliberate edit
 
 ## src/mcp.story.test.ts
 
@@ -872,7 +884,7 @@ Tags: `proxy`, `security`
   **What the client got back**
 
   ```text
-  Error POSTing to endpoint: {"error":"invalid_token","error_description":"Missing Authorization header"}
+  Version negotiation failed: the server requires authorization (HTTP 401)
   ```
 
 - **Then** the proxy refuses it and the upstream is never called
@@ -905,6 +917,14 @@ Tags: `catalogue`, `proxy`
 </details>
 
 - **Then** read tools survive and write tools are hidden
+
+### ✅ hides a tool whose definition changed since it was recorded, and refuses its calls
+
+Tags: `proxy`, `security`
+
+- **Given** search_cases was priced as "Find cases", and the upstream has since rewritten it
+- **Then** the reader is not shown it, though their permission covers it
+- **And** a call naming it anyway never reaches the upstream
 
 ### ✅ forwards a permitted tools/call
 
@@ -945,11 +965,60 @@ Tags: `proxy`, `scopes`
 
 - **Then** the proxy asks for the missing scope instead of forwarding
 
-### ✅ passes SSE upstream bodies through without parsing them
+### ✅ refuses anything but a POST, without asking the upstream
 
-Tags: `proxy`, `streaming`
+Tags: `proxy`, `security`
 
-- **Then** the event stream is forwarded unchanged
+- **When** a client opens the GET stream older protocol versions used
+- **Then** it is refused, and nothing reached the upstream on the service credential
+
+### ✅ refuses a request without 2026-07-28 routing headers
+
+Tags: `proxy`, `security`
+
+### ✅ refuses a method nobody decided how to authorize, without forwarding it
+
+Tags: `proxy`, `security`
+
+### ✅ prices a completion as the prompt it completes
+
+Tags: `proxy`, `security`
+
+- **Given** triage is a prompt only writers may use
+- **When** a reader asks to complete one of its arguments
+- **Then** the completion handler never runs
+
+### ✅ prices each resource a subscription names, as a read of it
+
+Tags: `proxy`, `security`
+
+### ✅ refuses a body that repeats a key, which parsers resolve differently
+
+Tags: `proxy`, `security`
+
+- **When** a body names close_run, then get_case, under the same key
+- **Then** it is refused before anything decides which one it meant
+
+### ✅ checks a definition before the first call, when nothing has been listed
+
+Tags: `proxy`, `security`
+
+- **Given** an upstream that rewrote search_cases while the proxy was down
+- **When** a client calls it straight away, from a catalogue it cached earlier
+- **Then** the proxy lists the upstream itself first, and refuses the call
+- **And** an unchanged tool is checked the same way, and then called
+
+### ✅ marks a filtered listing private, whatever the upstream said about sharing it
+
+Tags: `proxy`, `security`
+
+### ✅ removes the upstream's instructions when they differ from the record
+
+Tags: `proxy`, `security`
+
+- **Given** instructions recorded as "Search before you read a case."
+- **When** the upstream rewrites them, every tool unchanged
+- **Then** the client receives none, and the log says why
 
 ### ✅ filters JSON listing responses from the upstream
 
@@ -1018,7 +1087,7 @@ Tags: `proxy`, `streaming`
 {
   "contentLength": null,
   "contentEncoding": null,
-  "actualBytes": 69
+  "actualBytes": 167
 }
 ```
 
@@ -1061,6 +1130,18 @@ Tags: `operations`, `proxy`
 - **Then** the original error propagates, with its type and message intact
   > A refusal is a considered answer and is returned. A bug is not, and belongs to whatever runs this process — swallowing it into a 500 would lose the stack that explains it.
 
+### ✅ holds a completion and a subscription to the scopes of what they reach
+
+Tags: `proxy`, `scopes`, `security`
+
+- **Given** triage and the case resource each need a step-up scope
+- **When** a reader with only the baseline scope reaches them indirectly
+- **Then** both are challenged for the scope a direct request would need, and nothing is forwarded
+
+### ✅ refuses arguments outside the approved inputSchema, before the upstream runs
+
+Tags: `proxy`, `security`
+
 ### ✅ requires a resource step-up scope, matched by URI against the label it was keyed by
 
 Tags: `proxy`, `scopes`
@@ -1091,7 +1172,7 @@ Tags: `proxy`, `streaming`
 
 ```text
 event: message
-data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
 
 
 ```
@@ -1120,7 +1201,7 @@ Tags: `proxy`, `streaming`
   **First event through**
 
   ```text
-  data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+  data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
 
 
   ```
@@ -1136,7 +1217,7 @@ Tags: `proxy`, `streaming`
 
 ```text
 event: message
-data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
 ```
 
 - **Then** the catalogue is filtered rather than passed through unread
@@ -1166,7 +1247,7 @@ Tags: `proxy`, `streaming`
 
 ```text
 event: message
-data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
 
 
 ```
@@ -1253,7 +1334,7 @@ Tags: `proxy`, `streaming`
 
 ```text
 event: message
-data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
+data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
 
 
 ```
@@ -1265,6 +1346,54 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_cases"}]}}
 Tags: `proxy`, `streaming`
 
 - **Then** the byte cap still refuses it, counted over the reassembled event
+
+## src/resource-overlap.story.test.ts
+
+### Reading a URI that an exact resource and a template both cover
+
+### ✅ demands the exact resource’s scope too, registered broad first
+
+Tags: `oauth`, `scopes`, `security`
+
+- **Given** Dana holds both permissions but only the broad template’s scope
+- **When** she reads the URI the exact payroll resource serves
+- **Then** the gate challenges for the payroll scope instead of running the exact handler
+- **And** the payroll scope alone is not enough either: the template’s scope is demanded too
+- **And** with every matching scope she gets the payroll contents
+
+### ✅ demands the exact resource’s scope too, registered exact first
+
+Tags: `oauth`, `scopes`, `security`
+
+- **Given** Dana holds both permissions but only the broad template’s scope
+- **When** she reads the URI the exact payroll resource serves
+- **Then** the gate challenges for the payroll scope instead of running the exact handler
+- **And** the payroll scope alone is not enough either: the template’s scope is demanded too
+- **And** with every matching scope she gets the payroll contents
+
+### ✅ refuses a principal missing the exact resource’s permission, registered broad first
+
+Tags: `access`, `security`
+
+- **Given** a reader granted only the broad template’s permission, holding every scope
+- **When** she reads the payroll URI
+- **Then** the policy refuses naming the unmet admin permission
+
+### ✅ refuses a principal missing the exact resource’s permission, registered exact first
+
+Tags: `access`, `security`
+
+- **Given** a reader granted only the broad template’s permission, holding every scope
+- **When** she reads the payroll URI
+- **Then** the policy refuses naming the unmet admin permission
+
+### ✅ serves a URI only the template covers on the template’s scope alone
+
+Tags: `oauth`, `scopes`
+
+- **Given** a reader holding only the template’s permission and scope
+- **When** she reads a URI the exact resource does not cover
+- **Then** the template serves it, with no payroll scope or admin permission asked for
 
 ## src/wrap.story.test.ts
 
@@ -1295,6 +1424,44 @@ Tags: `dx`, `wrap`
 - **When** the client lists tools
 - **Then** only the allowed tool is listed
 - **And** stderr says what was hidden, and that one name matched nothing
+
+### ✅ with recorded definitions, hides an allowed tool the record never saw
+
+Tags: `security`, `wrap`
+
+- **Given** an allow list naming update_case, and a record that predates it
+- **When** the client lists tools
+- **Then** only the tool whose definition was approved is shown
+
+### ✅ checks a definition before a call made without listing first
+
+Tags: `security`, `wrap`
+
+- **Given** search_cases approved as something other than what the server now says
+- **When** the client calls it without ever listing
+- **Then** wrap lists the server itself, refuses the call, and the server never runs it
+
+### ✅ checks a tool on the second page of a modern server, keeping the protocol fields
+
+Tags: `security`, `wrap`
+
+- **Given** a server that lists update_case on page two and wants _meta on every request
+- **When** the client calls update_case straight away
+- **Then** wrap reads both pages, finds it unchanged, and the call runs
+
+### ✅ answers a call whose recorded schema cannot be checked, and keeps running
+
+Tags: `security`, `wrap`
+
+- **When** the client calls the tool, then pings
+- **Then** the call is refused with a reason, and wrap is still there to answer
+
+### ✅ refuses a request whose id it could not match to the answer
+
+Tags: `security`, `wrap`
+
+- **When** a listing and a call carry an id past 2^53
+- **Then** both are refused, with the id echoed exactly, and neither reaches the server
 
 ### ✅ exits non-zero, saying why, when the upstream cannot start
 

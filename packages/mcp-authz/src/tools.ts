@@ -545,8 +545,12 @@ type ServerFactory<C> = ((context: C) => McpServer) & {
   permissions: ReadonlyMap<string, string>;
   routePermissions: ReadonlyMap<string, string>;
   permissionForRoute: (kind: Capability, name: string) => string | undefined;
-  /** The registered route name a concrete request name resolves to, template included. */
-  routeNameFor: (kind: Capability, name: string) => string | undefined;
+  /**
+   * Every registration a concrete request name reaches, templates included, in
+   * registration order. More than one when an exact resource and a template
+   * cover the same URI.
+   */
+  routesFor: (kind: Capability, name: string) => { routeName: string; permission: string }[];
 };
 
 function buildServer<P extends string, C>(
@@ -607,19 +611,23 @@ function buildServer<P extends string, C>(
     return server;
   };
 
+  // The SDK serves an exact resource ahead of any template, whatever order they
+  // were registered in, so picking the first match here could price one
+  // registration and run another. Returning all of them lets the gate demand
+  // every permission and scope that could apply.
+  const routesFor = (kind: Capability, name: string) =>
+    definitions
+      .filter(
+        (definition) =>
+          definition.kind === kind && (definition.routeMatches?.(name) ?? definition.routeName === name),
+      )
+      .map((definition) => ({ routeName: definition.routeName!, permission: definition.permission }));
+
   return Object.assign(factory, {
     permissions: permissions as ReadonlyMap<string, string>,
     routePermissions: routePermissions as ReadonlyMap<string, string>,
-    routeNameFor: (kind: Capability, name: string) =>
-      definitions.find(
-        (definition) =>
-          definition.kind === kind && (definition.routeMatches?.(name) ?? definition.routeName === name),
-      )?.routeName,
-    permissionForRoute: (kind: Capability, name: string) =>
-      definitions.find(
-        (definition) =>
-          definition.kind === kind && (definition.routeMatches?.(name) ?? definition.routeName === name),
-      )?.permission,
+    routesFor,
+    permissionForRoute: (kind: Capability, name: string) => routesFor(kind, name)[0]?.permission,
   });
 }
 

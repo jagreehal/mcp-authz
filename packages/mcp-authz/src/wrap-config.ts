@@ -1,15 +1,25 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
-import type { WrapOptions } from './wrap';
+import {
+  captureListings,
+  changedFields,
+  definitionOf,
+  INSTRUCTIONS,
+  reveal,
+  suspicious,
+  type Definition,
+} from './definitions';
+import { estimateTokens, formatTokens, type WrapOptions } from './wrap';
 
 /**
- * The file `mcp-authz tools --out` writes and `mcp-authz wrap --config` runs.
+ * The file `mcp-authz tools --out` writes and `mcp-authz wrap <file>` runs.
  *
  * JSONC, so each tool can carry its description and hint as a comment, and a
  * tool can be switched off by commenting it out rather than by deleting the
  * record that it exists. Next to it sits a JSON Schema listing every tool the
  * server offered, which is what gives an editor completion and typo squiggles,
- * and what `check` compares the live server against.
+ * and what `check` compares the live server against. It also records each
+ * tool's definition, which is what `wrap` holds the server to.
  */
 
 export type Hint = 'read-only' | 'destructive' | 'unknown';
@@ -19,25 +29,44 @@ export type DiscoveredTool = {
   description: string;
   /** Argument names, required ones marked: `id (required)`. */
   params: string[];
+  /** What the definition costs in the model's context, roughly. */
+  tokens: number;
+  /** The definition as the server sent it, the parts `wrap` holds it to. */
+  pin: Definition;
+  /** Why it deserves a closer read before you switch it on, if it does. */
+  warnings: string[];
 };
 
+/** Where the schema keeps the definitions; editors ignore an `x-` keyword. */
+const RECORDED = 'x-mcp-authz-tools';
+
+/** What a server offers: its tools, and the instructions it gives the model, if any. */
+export type Discovered = { tools: DiscoveredTool[]; instructions?: string };
+
 /** Ask a stdio server for its tools, the way a client would. */
-export async function discover(
-  command: string,
-  args: readonly string[],
-  cwd?: string,
-): Promise<DiscoveredTool[]> {
+export async function discover(command: string, args: readonly string[], cwd?: string): Promise<Discovered> {
   // Imported here so check and explain do not load an MCP client to read JSON.
   const { Client } = await import('@modelcontextprotocol/client');
   const { StdioClientTransport } = await import('@modelcontextprotocol/client/stdio');
-  const client = new Client({ name: 'mcp-authz-tools', version: '1.0.0' });
+  // Either era: wrap forwards whichever version the client and server agree,
+  // so discovery has to reach a modern server and a 2025 one alike.
+  const client = new Client(
+    { name: 'mcp-authz-tools', version: '1.0.0' },
+    { versionNegotiation: { mode: 'auto' } },
+  );
   // The SDK passes a child only PATH, HOME and a few others unless told
   // otherwise, and a server that reads its API key from the shell would then
   // start without one. `wrap` inherits everything; discovery has to match it.
   const env = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
-  await client.connect(new StdioClientTransport({ command, args: [...args], env, ...(cwd ? { cwd } : {}) }));
+  const transport = new StdioClientTransport({ command, args: [...args], env, ...(cwd ? { cwd } : {}) });
+  // Pins are taken from the messages as the server wrote them, before the SDK
+  // parses them into its own shape, because that is what `wrap` will compare:
+  // it reads the server's lines and nothing else. Installed around connect, so
+  // the answer carrying the instructions is captured too.
+  const raw = captureListings(transport);
+  await client.connect(transport);
   try {
     const tools: DiscoveredTool[] = [];
     let cursor: string | undefined;
@@ -46,22 +75,30 @@ export async function discover(
       for (const tool of page.tools) {
         tools.push({
           name: tool.name,
-          // What the server claims, shown to help you choose. `wrap` filters by
-          // name alone, and a tool that declares nothing is labelled unknown.
-          hint: tool.annotations?.readOnlyHint
-            ? 'read-only'
-            : tool.annotations?.destructiveHint
-              ? 'destructive'
+          // What the server claims, shown to help you choose. A claim, not a
+          // fact: destructive wins when a server says both, so a tool cannot
+          // talk its way into starting switched on.
+          hint: tool.annotations?.destructiveHint
+            ? 'destructive'
+            : tool.annotations?.readOnlyHint
+              ? 'read-only'
               : 'unknown',
-          description: tool.description?.split('\n')[0]?.trim() ?? '',
+          description: reveal(tool.description?.split('\n')[0]?.trim() ?? ''),
           params: Object.keys(tool.inputSchema.properties ?? {}).map((param) =>
             tool.inputSchema.required?.includes(param) ? `${param} (required)` : param,
           ),
+          tokens: estimateTokens(raw.get(tool.name) ?? tool),
+          pin: definitionOf(raw.get(tool.name) ?? tool),
+          warnings: suspicious(definitionOf(raw.get(tool.name) ?? tool)),
         });
       }
       cursor = page.nextCursor;
     } while (cursor);
-    return tools.sort((a, b) => a.name.localeCompare(b.name));
+    const instructions = client.getInstructions();
+    return {
+      tools: tools.sort((a, b) => a.name.localeCompare(b.name)),
+      ...(typeof instructions === 'string' ? { instructions } : {}),
+    };
   } finally {
     await client.close();
   }
@@ -75,29 +112,43 @@ export function schemaPathFor(configPath: string): string {
 /**
  * Write the config and its schema.
  *
- * In a fresh config, destructive tools start commented out. Over an existing
- * config, the choices in it are kept and a tool the server added since starts
- * commented out, so a refresh keeps your edits and waits for you to switch new
- * tools on.
+ * In a fresh config, only tools the server marks read-only start switched on,
+ * and not those flagged for a closer read. Over an existing config, the choices
+ * in it are kept, and a tool the server added or changed since starts commented
+ * out, so a refresh keeps your edits and waits for you to approve the rest.
+ * With no record to compare against, every tool counts as new.
  */
 export function writeWrapConfig(
   configPath: string,
   server: { command: string; args: readonly string[]; cwd: string },
-  tools: readonly DiscoveredTool[],
-  previous?: { options: WrapOptions; recorded?: readonly string[] },
-): { allowed: number; commented: number; added: number } {
+  { tools, instructions }: Discovered,
+  previous?: { options: WrapOptions; recorded?: ReadonlyMap<string, Definition> },
+): {
+  allowed: number;
+  commented: number;
+  added: number;
+  changed: number;
+  tokens: { allowed: number; total: number };
+} {
   const schemaPath = schemaPathFor(configPath);
-  const isNew = (name: string) => previous?.recorded !== undefined && !previous.recorded.includes(name);
+  const isNew = (tool: DiscoveredTool) => previous !== undefined && !previous.recorded?.has(tool.name);
+  // A changed definition needs approving again, like a new tool: what you
+  // switched on was the tool as it was then.
+  const isChanged = (tool: DiscoveredTool) => {
+    const approved = previous?.recorded?.get(tool.name);
+    return approved !== undefined && changedFields(approved, tool.pin).length > 0;
+  };
   const chosen = (tool: DiscoveredTool) => {
-    if (!previous) return tool.hint !== 'destructive';
-    if (isNew(tool.name)) return false;
+    // A flagged definition waits for a person to read it, as a destructive one does.
+    if (!previous) return tool.hint === 'read-only' && tool.warnings.length === 0;
+    if (isNew(tool) || isChanged(tool)) return false;
     const { allow, deny } = previous.options;
     return allow ? allow.includes(tool.name) : !deny?.includes(tool.name);
   };
   const on = tools.filter(chosen);
   const off = tools.filter((tool) => !chosen(tool));
   const note = (tool: DiscoveredTool) =>
-    ` // ${tool.hint}${tool.description ? ` · ${clip(tool.description)}` : ''}`;
+    ` //${tool.warnings.map((warning) => ` ⚠ ${warning} ·`).join('')} ${tool.hint} · ${formatTokens(tool.tokens)} tokens${tool.description ? ` · ${clip(tool.description)}` : ''}`;
 
   const entries = [
     // A comma after every entry, switched on or not, so uncommenting any line
@@ -125,15 +176,21 @@ export function writeWrapConfig(
     '',
   ].join('\n');
   writeFileSync(configPath, text);
-  writeFileSync(schemaPath, `${JSON.stringify(schemaFor(tools), null, 2)}\n`);
+  writeFileSync(schemaPath, `${JSON.stringify(schemaFor(tools, instructions), null, 2)}\n`);
   return {
     allowed: on.length,
     commented: off.length,
-    added: tools.filter((tool) => isNew(tool.name)).length,
+    added: tools.filter(isNew).length,
+    changed: tools.filter(isChanged).length,
+    tokens: { allowed: sum(on), total: sum(tools) },
   };
 }
 
-function schemaFor(tools: readonly DiscoveredTool[]) {
+function sum(tools: readonly DiscoveredTool[]): number {
+  return tools.reduce((total, tool) => total + tool.tokens, 0);
+}
+
+function schemaFor(tools: readonly DiscoveredTool[], instructions: string | undefined) {
   const names = { type: 'array', items: { $ref: '#/definitions/tool' }, uniqueItems: true };
   return {
     $schema: 'http://json-schema.org/draft-07/schema#',
@@ -167,31 +224,70 @@ function schemaFor(tools: readonly DiscoveredTool[]) {
           ? { anyOf: tools.map((tool) => ({ const: tool.name, description: note(tool) })) }
           : { not: {} },
     },
+    // Pretty-printed with sorted keys, so a refresh's diff shows the exact
+    // words a server changed in a description or schema.
+    [RECORDED]: Object.fromEntries([
+      ...tools.map((tool) => [tool.name, tool.pin] as const),
+      ...(instructions === undefined ? [] : [[INSTRUCTIONS, { instructions }] as const]),
+    ]),
   };
   // Only the editor shows this, so it can carry what the file has no room for:
   // the arguments, which say more about what a tool can do than its name.
   function note(tool: DiscoveredTool) {
-    const said = tool.description ? `${tool.hint} · ${tool.description}` : tool.hint;
+    const head = `${tool.hint} · ${formatTokens(tool.tokens)} tokens`;
+    const said = tool.description ? `${head} · ${tool.description}` : head;
     return tool.params.length > 0 ? `${said}\n\nTakes: ${tool.params.join(', ')}` : said;
   }
 }
 
-/** Every tool name the schema beside a config recorded, if it is there. */
-export function recordedTools(configPath: string): string[] | undefined {
+/**
+ * What the schema beside a config recorded: each tool's definition, and the
+ * server's instructions under `server:instructions`. Throws when the record is
+ * missing or damaged, because wrap without it would filter by name alone while
+ * looking exactly as protected as before.
+ */
+export function recordedTools(configPath: string): Map<string, Definition> {
+  const schemaPath = schemaPathFor(configPath);
+  const fail = (problem: string): never => {
+    throw new Error(
+      `${schemaPath}: ${problem}. It records what you approved, and wrap will not run without it. ` +
+        `Run mcp-authz tools --refresh ${configPath} to record the server again; every tool starts switched off.`,
+    );
+  };
+  let schema: unknown;
   try {
-    const schema = JSON.parse(readFileSync(schemaPathFor(configPath), 'utf8')) as {
-      definitions?: { tool?: { anyOf?: { const: string }[] } };
-    };
-    const tool = schema.definitions?.tool;
-    // A recorded catalogue of no tools is still a record, not a missing one.
-    return tool ? (tool.anyOf ?? []).map((entry) => entry.const) : undefined;
+    schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+  } catch (error) {
+    return fail((error as { code?: unknown }).code === 'ENOENT' ? 'missing' : 'not valid JSON');
+  }
+  const recorded = (schema as Record<string, unknown> | null)?.[RECORDED];
+  if (typeof recorded !== 'object' || recorded === null || Array.isArray(recorded)) {
+    return fail(`no "${RECORDED}" record in it`);
+  }
+  for (const [name, definition] of Object.entries(recorded)) {
+    if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
+      fail(`the record for "${name}" is not a definition`);
+    }
+  }
+  // A Map, so a tool named __proto__ is a tool like any other.
+  return new Map(Object.entries(recorded as Record<string, Definition>));
+}
+
+/** The record, or nothing when there is none to read: for a refresh, which writes a new one. */
+export function recordedToolsIfAny(configPath: string): Map<string, Definition> | undefined {
+  try {
+    return recordedTools(configPath);
   } catch {
     return undefined;
   }
 }
 
-/** Read a config into what `wrap` takes, saying which file is wrong and how. */
-export function readWrapConfig(configPath: string): WrapOptions {
+/**
+ * Read a config into what `wrap` takes, saying which file is wrong and how.
+ * Without `record: false`, the record beside it must be there and must cover
+ * every tool the config names.
+ */
+export function readWrapConfig(configPath: string, { record = true } = {}): WrapOptions {
   const fail = (problem: string): never => {
     throw new Error(`${configPath}: ${problem}`);
   };
@@ -241,10 +337,21 @@ export function readWrapConfig(configPath: string): WrapOptions {
   for (const key of ['allow', 'deny'] as const) {
     if (config[key] !== undefined && !strings(config[key])) fail(`"${key}" must be a list of tool names.`);
   }
+  const pinned = record ? recordedTools(configPath) : undefined;
+  // A name the record lacks was never approved as anything: a typo, or added by
+  // hand. Refusing it here says so, where hiding it at runtime would not.
+  const unrecorded = ((config.allow ?? config.deny ?? []) as string[]).filter((name) => !pinned?.has(name));
+  if (pinned && unrecorded.length > 0) {
+    fail(
+      `${unrecorded.map((name) => `"${name}"`).join(', ')} not in the record beside it. ` +
+        `Fix the name, or run mcp-authz tools --refresh ${configPath} to record the server again.`,
+    );
+  }
   return {
     command: config.server!.command as string,
     args: args as string[],
     cwd: resolve(dirname(resolve(configPath)), cwd as string),
+    ...(pinned ? { pinned } : {}),
     ...(config.allow ? { allow: config.allow as string[] } : {}),
     ...(config.deny ? { deny: config.deny as string[] } : {}),
   };
@@ -253,7 +360,7 @@ export function readWrapConfig(configPath: string): WrapOptions {
 function entryFor(configPath: string) {
   return {
     name: basename(configPath, extname(configPath)),
-    entry: { command: 'npx', args: ['-y', 'mcp-authz', 'wrap', '--config', resolve(configPath)] },
+    entry: { command: 'npx', args: ['-y', 'mcp-authz', 'wrap', resolve(configPath)] },
   };
 }
 

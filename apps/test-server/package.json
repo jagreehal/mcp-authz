@@ -1,0 +1,32 @@
+{
+  "name": "mcp-authz-test-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An MCP server that misbehaves on demand, for trying wrap and createMcpProxy by hand",
+  "type": "module",
+  "scripts": {
+    "stdio": "tsx src/server.ts",
+    "http": "tsx src/server.ts --http",
+    "lint": "eslint src",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "zod": "^4.6.5",
+    "mcp-authz": "workspace:*",
+    "@modelcontextprotocol/client": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "tsx": "^4.23.15",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^5.0.3",
+    "jose": "^6.2.12"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

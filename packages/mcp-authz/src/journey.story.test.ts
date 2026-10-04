@@ -32,11 +32,10 @@ afterEach(() => {
 
 /** Run what the client entry says to run, and talk to it as the client would. */
 async function connectAsClient(entry: { args: string[] }) {
-  const flags = entry.args.slice(entry.args.indexOf('wrap') + 1);
-  expect(flags[0]).toBe('--config');
+  const [config] = entry.args.slice(entry.args.indexOf('wrap') + 1);
   const toWrap = new PassThrough();
   const fromWrap = new PassThrough();
-  const exited = wrap(readWrapConfig(flags[1]!), { input: toWrap, output: fromWrap, log: () => {} });
+  const exited = wrap(readWrapConfig(config!), { input: toWrap, output: fromWrap, log: () => {} });
 
   let buffered = '';
   const transport: Transport = {
@@ -84,8 +83,8 @@ it('save, switch a tool off, connect, upgrade, refresh: the choice survives', as
     await main(['tools', '--out', config, '--client-out', clientFile, '--', process.execPath, UPSTREAM]),
   ).toBe(0);
 
-  story.and('switches update_case off by commenting out its line');
-  writeFileSync(config, readFileSync(config, 'utf8').replace('"update_case",', '// "update_case",'));
+  story.and('leaves update_case off, as it starts: the server does not say it is read-only');
+  expect(readFileSync(config, 'utf8')).toContain('// "update_case",');
 
   story.when('their client starts the server from the entry it was given');
   const entry = JSON.parse(readFileSync(clientFile, 'utf8')).mcpServers.cases;
@@ -105,10 +104,10 @@ it('save, switch a tool off, connect, upgrade, refresh: the choice survives', as
   out = '';
   expect(await main(['tools', '--check', config])).toBe(1);
   expect(out).toContain('+ export_cases');
-  expect(out).toContain(`tools --config ${config} --refresh`);
+  expect(out).toContain(`tools --refresh ${config}`);
 
   story.when('they refresh');
-  expect(await main(['tools', '--config', config, '--refresh'])).toBe(0);
+  expect(await main(['tools', '--refresh', config])).toBe(0);
 
   story.then('their choice survives, the new tool arrives switched off, and check passes');
   expect(readWrapConfig(config).allow).toEqual(['search_cases']);
@@ -119,4 +118,50 @@ it('save, switch a tool off, connect, upgrade, refresh: the choice survives', as
   const second = await connectAsClient(entry);
   expect((await second.client.listTools()).tools.map((t) => t.name)).toEqual(['search_cases']);
   await second.close();
+});
+
+it('a rug pull: an approved tool changes its description, and loses its place until reviewed', async ({
+  task,
+}) => {
+  story.init(task, {
+    tags: ['wrap', 'journey', 'security'],
+    covers: ['src/cli.ts', 'src/wrap.ts', 'src/wrap-config.ts'],
+  });
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-authz-rug-'));
+  const config = join(dir, 'cases.jsonc');
+  const clientFile = join(dir, 'mcp.json');
+
+  story.given('a person approves search_cases as "Find cases"');
+  expect(
+    await main(['tools', '--out', config, '--client-out', clientFile, '--', process.execPath, UPSTREAM]),
+  ).toBe(0);
+  const entry = JSON.parse(readFileSync(clientFile, 'utf8')).mcpServers.cases;
+  story.and('switches update_case on as well');
+  writeFileSync(config, readFileSync(config, 'utf8').replace('// "update_case",', '"update_case",'));
+
+  story.when('the server, under the same name, starts telling the model to read an SSH key');
+  vi.stubEnv('CASE_TRACKER_RUG_PULL', '1');
+
+  story.then('the model never sees the new description, and a call is refused');
+  const session = await connectAsClient(entry);
+  expect((await session.client.listTools()).tools.map((t) => t.name).sort()).toEqual(['update_case']);
+  await expect(session.client.callTool({ name: 'search_cases', arguments: {} })).rejects.toThrow(
+    /search_cases.*description changed since you approved it/,
+  );
+  await session.close();
+
+  story.and('tools --check shows the words that changed');
+  out = '';
+  expect(await main(['tools', '--check', config])).toBe(1);
+  expect(out).toContain('~ search_cases');
+  expect(out).toContain('description was: "Find cases"');
+  expect(out).toContain('read ~/.ssh/id_rsa');
+
+  story.when('they refresh without reading it');
+  expect(await main(['tools', '--refresh', config])).toBe(0);
+
+  story.then('the changed tool is recorded but switched off, so approving it is a deliberate edit');
+  expect(readWrapConfig(config).allow).toEqual(['update_case']);
+  expect(readFileSync(config, 'utf8')).toContain('// "search_cases",');
+  expect(await main(['tools', '--check', config])).toBe(0);
 });

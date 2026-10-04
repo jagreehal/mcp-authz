@@ -31,6 +31,19 @@ pnpm --filter mcp-authz-proxy-example dev
 Claude (or any MCP client) dials `MCP_PUBLIC_URL`. The proxy dials `UPSTREAM_URL`
 with `UPSTREAM_TOKEN`.
 
+The proxy speaks MCP 2026-07-28 only, so the client must too. A client that
+still opens with the 2025 `initialize` handshake gets a 400, and the upstream
+must answer a 2026-07-28 client, because that is how the proxy lists it.
+
+`src/proxy.ts` passes `PERMISSIONS`, `DEFINITIONS` and `RESOURCE_URIS` from
+`src/permissions.ts`. `DEFINITIONS` is what each capability said when you
+recorded it: the proxy hides and refuses one whose definition has since changed,
+and logs which fields moved. Before a call to a capability it has not checked
+in the last minute, the proxy lists the upstream itself, so a client that calls
+without listing is held to the record too. The upstream's instructions are
+removed when they differ from `DEFINITIONS['server:instructions']`. Re-record to
+approve a change.
+
 ## Deploy to Cloudflare Workers
 
 ```bash

@@ -4,6 +4,28 @@ PyPI releases are versioned separately from the npm package. Policy behaviour is
 shared and pinned by [`conformance/v1`](../../conformance/README.md); everything
 else moves independently.
 
+## Unreleased
+
+The proxy, breaking:
+
+- **`McpProxy` requires `definitions`.** A capability whose live definition
+  differs from the one recorded is hidden from listings and its calls are
+  refused; a call the proxy has not seen listed lately is checked against the
+  upstream's catalogue first. Changed `server/discover` instructions are
+  withheld.
+- **MCP `2026-07-28` only, and only methods it can price.** Legacy requests,
+  non-`POST` methods (`405`) and unknown methods (`-32601`) are refused rather
+  than forwarded. `completion/complete` and `subscriptions/listen` are priced as
+  the prompt or resource reads they stand in for.
+- **Filtered listings are private.** `cacheScope: "private"` and
+  `Cache-Control: private, no-store`, with the upstream's validators removed.
+- **A body that repeats a key is refused** with `-32600`.
+- **Tool calls are held to the recorded schemas.** Arguments that break the
+  recorded `inputSchema` are refused with `-32602`; structured output that
+  breaks the `outputSchema` is withheld; output with invisible characters or
+  text addressed to the model gets a warning prepended. Adds `jsonschema`, which
+  the MCP SDK already installs, as a declared dependency.
+
 ## 0.2.0
 
 Two refusals that used to be silent permissions. Both are breaking, and both

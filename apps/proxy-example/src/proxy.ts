@@ -1,5 +1,5 @@
 import { createMcpProxy } from 'mcp-authz/proxy';
-import { PERMISSIONS, RESOURCE_URIS } from './permissions';
+import { DEFINITIONS, PERMISSIONS, RESOURCE_URIS } from './permissions';
 import { policy } from './policy';
 
 function required(env: Record<string, string | undefined>, name: string): string {
@@ -25,6 +25,7 @@ export function proxyFromEnv(env: Record<string, string | undefined> = process.e
     },
     policy,
     permissions: PERMISSIONS,
+    definitions: DEFINITIONS,
     resourceUris: RESOURCE_URIS,
     upstream: {
       url: required(env, 'UPSTREAM_URL'),

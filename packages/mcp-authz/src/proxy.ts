@@ -18,7 +18,11 @@ import {
   type AuthorizationDecisionSink,
   type ResourceIndex,
 } from './ladder';
-import { filterListingResult, isInvocationMethod, isListingMethod } from './catalogue';
+import { filterListingResult, isInvocationMethod, isListingMethod, retainListed } from './catalogue';
+import { missingDefinitions, type Definition } from './definitions';
+import { holdToRecord, type UpstreamRecord } from './upstream-record';
+import { checkArguments, screenResult, withNotice } from './screen';
+import { parseChecked } from './strict-json';
 import { scopesForCapability, type CapabilityScopeMap } from './scopes';
 import { reconcile, type Policy, type Principal } from './policy';
 import type { TrustedMcpRoute } from './routing';
@@ -47,6 +51,18 @@ export type McpProxyOptions<P extends string = string> = {
   /** Flat permission map — same labels as `gate()` and `recordCapabilities`. */
   permissions: Readonly<Record<string, P>> | ReadonlyMap<string, P>;
   /**
+   * What each priced capability said to the model when it was recorded: the
+   * `DEFINITIONS` that `mcp-authz record` writes beside `PERMISSIONS`.
+   *
+   * A permission prices a name, and the upstream decides what stands behind
+   * it. Without this, an upstream could keep an approved tool's name and
+   * rewrite its description to steer the model, or add an argument to carry
+   * data out, and every caller would be served the new one. With it, a
+   * capability whose definition has changed is left out of listings and its
+   * invocations are refused until someone re-records and approves the change.
+   */
+  definitions: Readonly<Record<string, Definition>>;
+  /**
    * `resource:<label>` to the URI or URI template it answers on.
    *
    * A listing names a resource; a read names a URI. Only the upstream knows
@@ -74,6 +90,7 @@ export function createMcpProxy<P extends string = string>(
     upstream,
     policy,
     permissions: permissionsInput,
+    definitions: definitionsInput,
     requiredScopes = ['mcp'],
     supportedScopes,
     capabilityScopes,
@@ -91,6 +108,16 @@ export function createMcpProxy<P extends string = string>(
   validatePermissions(permissions);
   validateScopes(capabilityScopes, permissions);
   const resources = buildResourceIndex(permissions, resourceUris);
+  const definitions = new Map(Object.entries(definitionsInput));
+  const unrecorded = missingDefinitions(permissions.keys(), definitions);
+  if (unrecorded.length > 0) {
+    throw new Error(
+      `These priced capabilities have no recorded definition, so a change to one would go unnoticed:\n` +
+        `${unrecorded.map((label) => `  ${label}`).join('\n')}\n\n` +
+        'Pass `definitions` from the module `mcp-authz record` writes, re-recording if it predates them.',
+    );
+  }
+  const record = holdToRecord(definitions, upstream);
 
   const invalidRequiredScope = requiredScopes.find((scope) => !OAUTH_SCOPE_TOKEN.test(scope));
   if (invalidRequiredScope !== undefined) {
@@ -191,7 +218,7 @@ export function createMcpProxy<P extends string = string>(
       request: Request,
       auth: AuthInfo,
       principal: Principal<P>,
-    ): AsyncResult<TrustedMcpRoute | undefined, Response> => {
+    ): AsyncResult<TrustedMcpRoute, Response> => {
       const can = (permission: string): boolean => principal.can(permission as P);
       const result = await runScopedGate({
         request,
@@ -209,39 +236,57 @@ export function createMcpProxy<P extends string = string>(
         // The map is keyed by label; a read carries a URI. Where several
         // patterns cover one URI, every one of their scopes is demanded, for
         // the same reason every one of their permissions is.
+        //
+        // A completion and a subscription reach a prompt or resources without
+        // invoking them, so they are held to the scopes each reached capability
+        // asks for, exactly as a direct request for it would be.
         resolveCapabilityScopes: (route) => {
-          if (route.method !== 'resources/read' || !route.name || !capabilityScopes) return undefined;
-          const labels = resources.filter((entry) => entry.matches(route.name!)).map((e) => e.label);
-          if (labels.length === 0) return undefined;
-          return [
-            ...new Set(
-              labels.flatMap((label) =>
-                scopesForCapability(
-                  route.method,
-                  label.slice('resource:'.length),
-                  capabilityScopes,
-                  requiredScopes[0] ?? 'mcp',
-                ),
-              ),
-            ),
-          ];
+          const reached = reach(route);
+          if (!capabilityScopes || !Array.isArray(reached) || route.method === 'tools/call') return undefined;
+          const baseline = requiredScopes[0] ?? 'mcp';
+          const scopes = reached.flatMap((target) =>
+            target.method === 'resources/read'
+              ? coveringResources(resources, target.name!).flatMap((entry) =>
+                  scopesForCapability(
+                    target.method,
+                    entry.label.slice('resource:'.length),
+                    capabilityScopes,
+                    baseline,
+                  ),
+                )
+              : scopesForCapability(target.method, target.name, capabilityScopes, baseline),
+          );
+          return scopes.length > 0 ? [...new Set(scopes)] : undefined;
         },
         resolvePermission: (route) => permissionForFlatMap(permissions, route, resources, can),
         onDecision: options.onDecision,
         resourceMetadataUrl,
       });
-      return result.ok ? ok(result.preflight?.route) : err(result.response);
+      if (!result.ok) return err(result.response);
+      // 2026-07-28 or nothing. A request without validated routing headers is
+      // one whose capability only the body names, and this forwards on a
+      // credential that outranks the caller; there is no older dialect to keep.
+      if (!result.preflight?.headersValidated) {
+        return err(
+          jsonRpcError(
+            400,
+            -32_600,
+            'This proxy speaks MCP 2026-07-28: send the Mcp-Method and Mcp-Name routing headers.',
+            idOf(result.preflight?.route),
+          ),
+        );
+      }
+      return ok(result.preflight.route);
     },
 
-    /** Refuse an invocation nobody priced, so a new upstream tool inherits nothing. */
-    price: async (
-      principal: Principal<P>,
-      route: TrustedMcpRoute | undefined,
-    ): AsyncResult<undefined, Response> => {
-      const denied = await denyUnpricedInvocation({
+    /** Refuse any method not on the list, and anything unpriced, unpermitted or changed. */
+    price: async (principal: Principal<P>, route: TrustedMcpRoute): AsyncResult<undefined, Response> => {
+      const denied = await authorizeMessage({
         principal,
         permissions,
         resources,
+        record,
+        definitions,
         route,
         onDecision: options.onDecision,
         ...(emitter ? { emitter } : {}),
@@ -256,26 +301,34 @@ export function createMcpProxy<P extends string = string>(
     /** Hide from a listing what the caller could not have called anyway. */
     filter: async (
       response: Response,
-      route: TrustedMcpRoute | undefined,
+      route: TrustedMcpRoute,
       principal: Principal<P>,
     ): AsyncResult<Response, Response> => {
-      const method = route?.method;
-      if (!isListingMethod(method)) return ok(response);
+      const method = route.method;
+      // The upstream's instructions reach the model as a description does, so
+      // they are held to the record the same way.
+      const transform: Transform | undefined = isListingMethod(method)
+        ? (payload) => filterMessage(payload, method, principal, permissions, record)
+        : method === 'server/discover'
+          ? (payload) => holdInstructions(payload, record)
+          : method === 'tools/call'
+            ? (payload, raw) => screenAnswer(payload, raw, route.name!, definitions)
+            : undefined;
+      if (!transform) return ok(response);
+      // A listing filtered for this caller is theirs alone, whatever the
+      // upstream, serving one service account, said about sharing it.
+      const personal = isListingMethod(method);
+      // A tool's answer is held whole to be screened, and answers run larger
+      // than catalogues: an export, a file. Bounded all the same.
+      const cap = method === 'tools/call' ? Math.max(maxRequestBytes, ANSWER_BYTES) : maxRequestBytes;
       if (isEventStream(response)) {
-        return ok(
-          filterEventStreamListing(response, method, principal, permissions, maxRequestBytes, idOf(route)),
-        );
+        return ok(filterEventStream(response, method, transform, personal, cap, idOf(route)));
       }
       if (isJsonResponse(response)) {
-        const filtered = await filterJsonListing(response, method, principal, permissions, maxRequestBytes);
+        const filtered = await filterJson(response, transform, personal, cap);
         return filtered
           ? ok(filtered)
-          : err(
-              unfilterable(
-                `${method} was over ${maxRequestBytes} bytes or not readable as JSON-RPC`,
-                idOf(route),
-              ),
-            );
+          : err(unfilterable(`${method} was over ${cap} bytes or not readable as JSON-RPC`, idOf(route)));
       }
       // A catalogue this cannot read is one it cannot hide anything from.
       // Passing it through would serve the full catalogue to everyone the day
@@ -314,6 +367,14 @@ export function createMcpProxy<P extends string = string>(
       );
     }
 
+    // Every 2026-07-28 message is a POST; GET streams and DELETE sessions are gone.
+    if (request.method.toUpperCase() !== 'POST') {
+      return new Response('This proxy accepts MCP 2026-07-28 messages, which are all POSTs.\n', {
+        status: 405,
+        headers: { Allow: 'POST', 'Content-Type': 'text/plain' },
+      });
+    }
+
     const result = await run(steps, async (s) => {
       const auth = await s.verify(request);
       const principal = await s.authorize(auth);
@@ -333,41 +394,189 @@ export function createMcpProxy<P extends string = string>(
 }
 
 /**
- * Refuse any invocation the permission map does not price.
+ * What may pass through, method by method. Nothing else does: a method missing
+ * here is one nobody decided how to authorize, and forwarding it would run it on
+ * the service credential, which outranks every caller.
  *
- * `runScopedGate` refuses a capability the caller may not reach. This refuses
- * one nobody priced at all, which in a proxy is the more common shape: the
- * upstream grew a tool since the map was recorded, and an unpriced tool must
- * fail closed rather than inherit the service credential.
+ * Listings are filtered on the way back, so asking for one needs no permission.
+ * Invocations, and the two methods that reach a capability without invoking it,
+ * are priced like a call: a completion runs the prompt's or resource's handler,
+ * and a subscription reports updates to the resources it names.
  */
-async function denyUnpricedInvocation<P extends string>(options: {
+// The most a screened tool answer may hold.
+const ANSWER_BYTES = 16 * 1024 * 1024;
+
+const PASS_THROUGH = new Set([
+  'server/discover',
+  'ping',
+  'tools/list',
+  'prompts/list',
+  'resources/list',
+  'resources/templates/list',
+  'notifications/cancelled',
+  'notifications/progress',
+]);
+
+/**
+ * A message rewritten on its way back, or `undefined` when it cannot be read.
+ * Returning `payload` itself means unchanged, and the bytes that arrived are
+ * passed on: re-serializing would round any integer past 2^53. `raw` is the
+ * message as it arrived, for a rewrite that must keep every digit.
+ */
+type Transform = (payload: unknown, raw: string) => unknown;
+
+async function authorizeMessage<P extends string>(options: {
   principal: Principal<P>;
   permissions: ReadonlyMap<string, string>;
-  resources: ResourceIndex;
-  route?: TrustedMcpRoute;
+  resources: ProxyResourceIndex;
+  record: UpstreamRecord;
+  definitions: ReadonlyMap<string, Definition>;
+  route: TrustedMcpRoute;
   onDecision?: AuthorizationDecisionSink;
   emitter?: string;
 }): Promise<Response | undefined> {
-  const { route, principal, emitter } = options;
-  if (!route || !isInvocationMethod(route.method)) return undefined;
+  const { route, principal, emitter, resources } = options;
+  if (PASS_THROUGH.has(route.method)) return undefined;
 
   const refuse = async (because: string): Promise<Response> => {
     await emitDecision(options.onDecision, principal, 'deny', 'policy_denied', emitter);
     return policyDenied(AccessDeniedError.notPermitted(principalLabel(principal), because));
   };
+  const can = (permission: string) => principal.can(permission as P);
 
-  // An invocation that names nothing cannot be priced, so it cannot be allowed.
-  if (!route.name) return refuse(`a ${route.method} that names no capability`);
-
-  const permission = permissionForFlatMap(options.permissions, route, options.resources, (candidate) =>
-    principal.can(candidate as P),
-  );
-  if (permission === undefined) {
-    return refuse(`the capability '${route.name}' is not priced in the permission map`);
+  const reached = reach(route);
+  if (reached === undefined) {
+    return jsonRpcError(
+      400,
+      -32_601,
+      `Method not found: this proxy does not forward ${route.method}.`,
+      idOf(route),
+    );
   }
-  if (!principal.can(permission as P)) return refuse(`the permission '${permission}'`);
+  if (typeof reached === 'string') return refuse(reached);
+
+  const labels: string[] = [];
+  for (const target of reached) {
+    if (target.method === 'resources/read') {
+      // Every registration covering the URI has to be satisfied, since which
+      // one the upstream serves it from is its business. A URI still holding a
+      // template's braces names that template, as a completion does, and is
+      // never read as literal characters some other pattern happens to match.
+      const uri = target.name!;
+      const covering = coveringResources(resources, uri);
+      if (covering.length === 0) return refuse(`the capability '${uri}' is not priced in the permission map`);
+      const denied = covering.find((entry) => !can(entry.permission));
+      if (denied) return refuse(`the permission '${denied.permission}'`);
+      labels.push(...covering.map((entry) => entry.label));
+      continue;
+    }
+    const permission = permissionForFlatMap(options.permissions, target, resources, can);
+    if (permission === undefined) {
+      return refuse(`the capability '${target.name}' is not priced in the permission map`);
+    }
+    if (!can(permission)) return refuse(`the permission '${permission}'`);
+    labels.push(
+      ...(target.method === 'tools/call' ? [target.name!, `tool:${target.name}`] : [`prompt:${target.name}`]),
+    );
+  }
+  // Priced and permitted, but the definition behind each name has to be the one
+  // approved, checked now if it was not checked recently.
+  const changed = await options.record.refuse(labels);
+  if (changed) return refuse(changed);
+  // The arguments a tool takes are part of what was approved.
+  if (route.method === 'tools/call') {
+    const definition = options.definitions.get(route.name!) ?? options.definitions.get(`tool:${route.name}`);
+    const params = (route.body as { params?: { arguments?: unknown } }).params;
+    const wrong = definition && checkArguments(route.name!, definition, params?.arguments);
+    if (wrong) return jsonRpcError(400, -32_602, `Invalid params: ${wrong}`, idOf(route));
+  }
   return undefined;
 }
+
+/**
+ * Each capability a message reaches, as the request that would invoke it
+ * directly: a string when the message is malformed, `undefined` for a method
+ * this does not forward. Pricing and scopes both start here, so a completion
+ * or a subscription is held to everything a direct request would be.
+ */
+function reach(route: TrustedMcpRoute): TrustedMcpRoute[] | string | undefined {
+  const params = (route.body as { params?: Record<string, unknown> } | undefined)?.params ?? {};
+  if (isInvocationMethod(route.method)) {
+    // An invocation that names nothing cannot be priced, so it cannot be allowed.
+    return route.name ? [route] : `a ${route.method} that names no capability`;
+  }
+  if (route.method === 'completion/complete') {
+    const ref = params.ref as { type?: unknown; name?: unknown; uri?: unknown } | undefined;
+    if (ref?.type === 'ref/prompt' && typeof ref.name === 'string') {
+      return [{ ...route, method: 'prompts/get', name: ref.name }];
+    }
+    if (ref?.type === 'ref/resource' && typeof ref.uri === 'string') {
+      return [{ ...route, method: 'resources/read', name: ref.uri }];
+    }
+    return 'a completion/complete whose ref names no prompt or resource';
+  }
+  if (route.method === 'subscriptions/listen') {
+    const uris = (params.notifications as { resourceSubscriptions?: unknown } | undefined)
+      ?.resourceSubscriptions;
+    if (uris !== undefined && !(Array.isArray(uris) && uris.every((uri) => typeof uri === 'string'))) {
+      return 'a subscriptions/listen whose resourceSubscriptions is not a list of URIs';
+    }
+    return ((uris ?? []) as string[]).map((uri) => ({ ...route, method: 'resources/read', name: uri }));
+  }
+  return undefined;
+}
+
+/**
+ * Every priced resource covering a URI, since which one the upstream serves it
+ * from is its business. A URI still holding a template's braces names that
+ * template, as a completion does, and is never read as literal characters some
+ * other pattern happens to match.
+ */
+function coveringResources(resources: ProxyResourceIndex, uri: string): ProxyResourceIndex {
+  return resources.filter((entry) => (uri.includes('{') ? entry.pattern === uri : entry.matches(uri)));
+}
+
+/** A JSON-RPC error the client can match to its request. */
+function jsonRpcError(status: number, code: number, message: string, id: string | number | null): Response {
+  return Response.json({ jsonrpc: '2.0', id, error: { code, message } }, { status });
+}
+
+/** A `tools/call` answer, screened against the tool's approved definition. */
+function screenAnswer(
+  payload: unknown,
+  raw: string,
+  tool: string,
+  definitions: ReadonlyMap<string, Definition>,
+): unknown {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined;
+  const message = payload as Record<string, unknown>;
+  if (!('result' in message)) return 'error' in message || 'method' in message ? message : undefined;
+  if (typeof message.result !== 'object' || message.result === null) return undefined;
+  const definition = definitions.get(tool) ?? definitions.get(`tool:${tool}`) ?? {};
+  // Checked as written: a number the plain parse rounded would pass a bound
+  // the upstream's own number breaks.
+  const checked = (parseChecked(raw) as { result: Record<string, unknown> }).result;
+  const screened = screenResult(tool, definition, checked);
+  if (screened.verdict === 'pass') return payload;
+  console.warn(`mcp-authz proxy: ${screened.warning}`);
+  return screened.verdict === 'withhold'
+    ? { ...message, result: screened.result }
+    : withNotice(raw, screened.notice);
+}
+
+/** A `server/discover` answer with its instructions held to the record. */
+function holdInstructions(payload: unknown, record: UpstreamRecord): unknown {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined;
+  const message = payload as Record<string, unknown>;
+  if (!('result' in message)) return 'error' in message || 'method' in message ? message : undefined;
+  if (typeof message.result !== 'object' || message.result === null) return undefined;
+  const { instructions, ...result } = message.result as Record<string, unknown>;
+  const kept = record.instructions(instructions);
+  return { ...message, result: kept === undefined ? result : { ...result, instructions: kept } };
+}
+
+/** The resource index, with the URI or template each label was registered at. */
+type ProxyResourceIndex = readonly (ResourceIndex[number] & { pattern: string })[];
 
 /**
  * Match each priced `resource:` label to the URIs it covers.
@@ -378,8 +587,9 @@ async function denyUnpricedInvocation<P extends string>(options: {
 function buildResourceIndex(
   permissions: ReadonlyMap<string, string>,
   resourceUris: Readonly<Record<string, string>> | undefined,
-): ResourceIndex {
-  const exact: { label: string; permission: string; matches: (uri: string) => boolean }[] = [];
+): ProxyResourceIndex {
+  const exact: { label: string; permission: string; pattern: string; matches: (uri: string) => boolean }[] =
+    [];
   const templated: typeof exact = [];
   const unpriced: string[] = [];
 
@@ -392,9 +602,14 @@ function buildResourceIndex(
     }
     if (uri.includes('{')) {
       const template = new UriTemplate(uri);
-      templated.push({ label, permission, matches: (target) => template.match(target) !== null });
+      templated.push({
+        label,
+        permission,
+        pattern: uri,
+        matches: (target) => template.match(target) !== null,
+      });
     } else {
-      exact.push({ label, permission, matches: (target) => target === uri });
+      exact.push({ label, permission, pattern: uri, matches: (target) => target === uri });
     }
   }
 
@@ -423,11 +638,10 @@ function buildResourceIndex(
  * has to be held whole to be filtered, so an upstream that sends an unbounded
  * one would otherwise choose how much memory this spends.
  */
-async function filterJsonListing<P extends string>(
+async function filterJson(
   response: Response,
-  method: Parameters<typeof filterListingResult>[0],
-  principal: Principal<P>,
-  permissions: ReadonlyMap<string, string>,
+  transform: Transform,
+  personal: boolean,
   maxBytes: number,
 ): Promise<Response | undefined> {
   const raw = await readCappedBody(response.body, maxBytes);
@@ -439,9 +653,11 @@ async function filterJsonListing<P extends string>(
   } catch {
     return undefined;
   }
-  const filtered = filterMessage(payload, method, principal, permissions);
+  const filtered = transform(payload, raw);
   if (filtered === undefined) return undefined;
-  return Response.json(filtered, { status: response.status, headers: headersForRewrittenBody(response) });
+  const headers = rewrittenHeaders(response, personal);
+  if (filtered === payload) return new Response(raw, { status: response.status, headers });
+  return Response.json(filtered, { status: response.status, headers });
 }
 
 /**
@@ -457,6 +673,7 @@ function filterMessage<P extends string>(
   method: Parameters<typeof filterListingResult>[0],
   principal: Principal<P>,
   permissions: ReadonlyMap<string, string>,
+  record: UpstreamRecord,
 ): unknown | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined;
   const message = payload as Record<string, unknown>;
@@ -465,7 +682,16 @@ function filterMessage<P extends string>(
   if (typeof result !== 'object' || result === null) return undefined;
   return {
     ...message,
-    result: filterListingResult(method, result as Record<string, unknown>, principal, permissions),
+    result: {
+      ...filterListingResult(
+        method,
+        retainListed(method, result as Record<string, unknown>, record.matches),
+        principal,
+        permissions,
+      ),
+      // Filtered for this caller, so no shared cache may hand it to another.
+      cacheScope: 'private',
+    },
   };
 }
 
@@ -481,11 +707,11 @@ function filterMessage<P extends string>(
  * rejoins — a filter that only understands `data: ` passes both straight
  * through, which is the whole catalogue, unfiltered.
  */
-function filterEventStreamListing<P extends string>(
+function filterEventStream(
   response: Response,
-  method: Parameters<typeof filterListingResult>[0],
-  principal: Principal<P>,
-  permissions: ReadonlyMap<string, string>,
+  method: string,
+  transform: Transform,
+  personal: boolean,
   maxEventBytes: number,
   id: string | number | null,
 ): Response {
@@ -537,7 +763,8 @@ function filterEventStreamListing<P extends string>(
         unfilterableBody(`${method} carried an unreadable event`, id),
       )}`;
     }
-    const filtered = filterMessage(payload, method, principal, permissions);
+    const filtered = transform(payload, data.join('\n'));
+    if (filtered === payload) return block;
     const body = filtered ?? unfilterableBody(`${method} carried an unrecognisable event`, id);
     return [...rest, `data: ${JSON.stringify(body)}`].join('\n');
   };
@@ -611,8 +838,22 @@ function filterEventStreamListing<P extends string>(
 
   return new Response(response.body?.pipeThrough(stream) ?? null, {
     status: response.status,
-    headers: headersForRewrittenBody(response),
+    headers: rewrittenHeaders(response, personal),
   });
+}
+
+/**
+ * Headers for a body this rewrote. A personal one may be cached by the caller
+ * alone, and validators the upstream computed over its own body would vouch
+ * for bytes this did not send.
+ */
+function rewrittenHeaders(response: Response, personal: boolean): Headers {
+  const headers = headersForRewrittenBody(response);
+  headers.delete('etag');
+  headers.delete('last-modified');
+  headers.delete('expires');
+  if (personal) headers.set('cache-control', 'private, no-store');
+  return headers;
 }
 
 /**

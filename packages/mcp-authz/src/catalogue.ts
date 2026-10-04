@@ -58,6 +58,30 @@ const LISTING_FIELDS = {
 
 type ListingMethod = keyof typeof LISTING_FIELDS;
 
+const LISTING_KINDS = {
+  tools: 'tool',
+  prompts: 'prompt',
+  resources: 'resource',
+  resourceTemplates: 'resource',
+} as const;
+
+/** A listing with the items `keep` refuses taken out, judged by the label the gate gives each. */
+export function retainListed(
+  method: ListingMethod,
+  result: Record<string, unknown>,
+  keep: (label: string, item: Record<string, unknown>) => boolean,
+): Record<string, unknown> {
+  const field = LISTING_FIELDS[method];
+  const items = result[field];
+  if (!Array.isArray(items)) return result;
+  return {
+    ...result,
+    [field]: (items as Record<string, unknown>[]).filter((item) =>
+      keep(capabilityLabel(LISTING_KINDS[field], String(item.name)), item),
+    ),
+  };
+}
+
 export function isListingMethod(method: string | undefined): method is ListingMethod {
   return method !== undefined && Object.hasOwn(LISTING_FIELDS, method);
 }

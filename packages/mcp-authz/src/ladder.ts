@@ -265,9 +265,22 @@ export async function preflightScopedRequest(
 
   let body: unknown;
   try {
-    body = JSON.parse(raw);
+    // Exact, so an integer past 2^53 is priced and checked as the upstream will
+    // read the bytes forwarded to it, not as JavaScript would round it.
+    body = parseChecked(raw);
   } catch {
     return protocolError(400, -32_700, 'Parse error: the request body is not valid JSON');
+  }
+  // Authorized as this parser reads it, acted on as the upstream's reads it:
+  // a repeated key is where those two can disagree about what is being asked.
+  if (hasDuplicateKey(raw)) {
+    return protocolError(
+      400,
+      -32_600,
+      'Invalid Request: the body repeats a key, which parsers resolve differently.',
+      undefined,
+      requestId(body),
+    );
   }
 
   const route = classifyScopedRequest(request, body);
@@ -331,3 +344,4 @@ export {
   type AuthorizationDecisionEvent,
   type AuthorizationDecisionSink,
 } from './decision';
+import { hasDuplicateKey, parseChecked } from './strict-json';

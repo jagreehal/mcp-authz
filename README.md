@@ -13,6 +13,7 @@ An OAuth 2.1 **resource server** plus an access policy, as a library you import 
 | [`mcp-authz-node-example`](apps/node-example)           | —        | Thin Node.js consumer that wires the library to a demo server |
 | [`mcp-authz-python-example`](apps/python-example)       | —        | Thin Python consumer using the official SDK                   |
 | [`mcp-authz-helpscout-example`](apps/helpscout-example) | —        | Help Scout tools for an org agent that holds a static bearer  |
+| [`mcp-authz-test-server`](apps/test-server)             | —        | A server that misbehaves on demand, for trying wrap and proxy |
 
 You bring the authorization server (WorkOS, Stytch, Auth0, …). This package never runs consent, DCR, or PKCE. It verifies tokens whose audience is your public MCP URL, decides what the caller may do, and registers only the tools they may use.
 
