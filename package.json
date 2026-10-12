@@ -43,7 +43,7 @@
     "tsdown": "^0.23.0",
     "turbo": "^2.11.7",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.71.0",
+    "typescript-eslint": "^8.71.1",
     "vitest": "^5.0.3"
   },
   "engines": {

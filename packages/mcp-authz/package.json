@@ -87,7 +87,7 @@
     "@types/node": "^26.6.4",
     "@typescript/native": "npm:typescript@^7.0.2",
     "ajv": "^8.20.0",
-    "executable-stories-vitest": "8.10.1",
+    "executable-stories-vitest": "8.10.2",
     "tsdown": "^0.23.0",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vitest": "^5.0.3",
