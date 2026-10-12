@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/node": "^2.1.1",
-    "@modelcontextprotocol/server": "^2.3.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "jose": "^6.2.12",
     "mcp-authz": "workspace:*",
     "zod": "^4.6.5"
