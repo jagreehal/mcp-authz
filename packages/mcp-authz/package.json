@@ -84,13 +84,13 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.1.1",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@typescript/native": "npm:typescript@^7.0.2",
     "ajv": "^8.20.0",
-    "executable-stories-vitest": "8.10.1",
-    "tsdown": "^0.23.0",
+    "executable-stories-vitest": "8.11.4",
+    "tsdown": "^0.23.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "vitest": "^5.0.3",
+    "vitest": "^5.0.5",
     "zod": "^4.6.5"
   },
   "engines": {

@@ -18,12 +18,12 @@
     "mcp-authz": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "tsdown": "^0.23.0",
+    "tsdown": "^0.23.1",
     "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "wrangler": "^4.147.0"
+    "wrangler": "^4.152.0"
   },
   "engines": {
     "node": ">=24"
