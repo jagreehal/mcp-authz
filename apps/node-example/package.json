@@ -15,11 +15,11 @@
     "token": "MCP_DEV_AUTH=1 tsx src/token.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "^2.1.1",
-    "@modelcontextprotocol/server": "^2.3.0",
-    "jose": "^6.2.12",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "jose": "^6.2.14",
     "mcp-authz": "workspace:*",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
