@@ -27,6 +27,7 @@ import { scopesForCapability, type CapabilityScopeMap } from './scopes';
 import { reconcile, type Policy, type Principal } from './policy';
 import type { TrustedMcpRoute } from './routing';
 import {
+  deadlineAfter,
   forwardToUpstream,
   headersForRewrittenBody,
   isEventStream,
@@ -35,6 +36,7 @@ import {
   type UpstreamConfig,
 } from './upstream';
 import { identityFromAuth, jwksVerifier, type VerifierOptions } from './verifier';
+import type { AuditErrorSink, AuditEvent, AuditSink } from './tools';
 
 const OAUTH_SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
@@ -75,6 +77,15 @@ export type McpProxyOptions<P extends string = string> = {
   supportedScopes?: string[];
   capabilityScopes?: CapabilityScopeMap;
   onDecision?: AuthorizationDecisionSink;
+  /**
+   * One `attempt` event before each forwarded tool call, prompt get or
+   * resource read, then `success` or `failure` under the same `callId`: the
+   * `mcp_authz.audit.v1` events embed mode and `mcp-authz/openapi` emit. When
+   * the `attempt` write throws, the call does not run and the caller gets a 503.
+   */
+  onAudit?: AuditSink;
+  /** Receives a terminal event the sink refused, for a retry queue or an alert. */
+  onAuditError?: AuditErrorSink;
   /** Names this deployment on every event it emits. See `McpFetchOptions`. */
   emitter?: string;
   healthPath?: string;
@@ -294,9 +305,27 @@ export function createMcpProxy<P extends string = string>(
       return denied ? err(denied) : ok(undefined);
     },
 
-    /** Swap the caller's credential for the service one and forward. */
-    forward: async (request: Request): AsyncResult<Response, Response> =>
-      ok(await forwardToUpstream(request, upstream)),
+    /** Record the attempt, then swap the caller's credential for the service one and forward. */
+    forward: async (
+      request: Request,
+      route: TrustedMcpRoute,
+      principal: Principal<P>,
+      call: Call,
+    ): AsyncResult<Response, Response> => {
+      const audited = options.onAudit && auditedCall(route, principal, permissions, resources, emitter);
+      if (audited) {
+        try {
+          await options.onAudit!({ type: 'mcp_authz.audit.v1', ...audited, phase: 'attempt', at: now() });
+        } catch {
+          // An action nobody could record is one that does not happen, as in embed mode.
+          return err(
+            jsonRpcError(503, -32_000, 'The audit log refused the write, so the call did not run.', call.id),
+          );
+        }
+        call.finish = terminalAudit(audited, options.onAudit!, options.onAuditError);
+      }
+      return ok(await forwardToUpstream(request, upstream, call.deadline));
+    },
 
     /** Hide from a listing what the caller could not have called anyway. */
     filter: async (
@@ -375,20 +404,45 @@ export function createMcpProxy<P extends string = string>(
       });
     }
 
+    const call: Call = { id: null, deadline: deadlineAfter(upstream.timeoutMs) };
+    // Why a forwarded call stopped short: the deadline, the client, or the error itself.
+    const stopped = (error: unknown): string =>
+      call.deadline?.aborted
+        ? `The upstream did not answer within ${upstream.timeoutMs}ms.`
+        : request.signal.aborted
+          ? 'The client closed the request.'
+          : error instanceof Error
+            ? error.message
+            : String(error);
+
     const result = await run(steps, async (s) => {
       const auth = await s.verify(request);
       const principal = await s.authorize(auth);
       const route = await s.gate(request, auth, principal);
+      call.id = idOf(route);
       await s.price(principal, route);
-      const upstreamResponse = await s.forward(request);
-      return s.filter(upstreamResponse, route, principal);
+      const upstreamResponse = await s.forward(request, route, principal, call);
+      const answer = await s.filter(upstreamResponse, route, principal);
+      // The call ends when the client has the whole answer, not when headers arrive.
+      return call.finish ? recordedOnCompletion(answer, call.finish, stopped) : answer;
     });
 
     if (result.ok) return result.value;
-    // A refusal is already the response it decided on. Anything else is a bug
-    // in this process, and belongs to the host's error handling rather than
-    // being flattened into a 500 that says nothing.
-    if (isUnexpectedError(result.error)) throw result.error.cause;
+    if (isUnexpectedError(result.error)) {
+      const cause = result.error.cause;
+      await call.finish?.(stopped(cause));
+      // The deadline and a departed client are this proxy's own answers, whether
+      // they fell on the request or while it read an answer to screen it.
+      if (call.deadline?.aborted) {
+        return jsonRpcError(504, -32_000, stopped(cause), call.id);
+      }
+      if (request.signal.aborted) return jsonRpcError(499, -32_000, stopped(cause), call.id);
+      // Anything else is a bug in this process, and belongs to the host's error
+      // handling rather than being flattened into a 500 that says nothing.
+      throw cause;
+    }
+    // A refusal is already the response it decided on.
+    await call.finish?.(`HTTP ${result.error.status}`);
     return result.error;
   };
 }
@@ -539,6 +593,125 @@ function coveringResources(resources: ProxyResourceIndex, uri: string): ProxyRes
 /** A JSON-RPC error the client can match to its request. */
 function jsonRpcError(status: number, code: number, message: string, id: string | number | null): Response {
   return Response.json({ jsonrpc: '2.0', id, error: { code, message } }, { status });
+}
+
+const now = () => new Date().toISOString();
+
+/** What one request carries through the steps: its JSON-RPC id, its deadline, and how to end its audit record. */
+type Call = {
+  id: string | number | null;
+  deadline: AbortSignal | undefined;
+  /** Writes the terminal audit event, once: `success` with no argument, `failure` with the reason. */
+  finish?: (failure?: string) => Promise<void>;
+};
+
+function terminalAudit(
+  audited: Omit<AuditEvent, 'type' | 'phase' | 'at'>,
+  sink: AuditSink,
+  onError: AuditErrorSink | undefined,
+): (failure?: string) => Promise<void> {
+  const started = performance.now();
+  let written = false;
+  return async (failure) => {
+    if (written) return;
+    written = true;
+    await deliver(sink, onError, {
+      type: 'mcp_authz.audit.v1',
+      ...audited,
+      phase: failure === undefined ? 'success' : 'failure',
+      at: now(),
+      durationMs: performance.now() - started,
+      ...(failure === undefined ? {} : { error: failure }),
+    });
+  };
+}
+
+/**
+ * The answer with its body watched: the terminal event is written when the
+ * client has read it all, when reading it fails, or when the client cancels.
+ */
+function recordedOnCompletion(
+  answer: Response,
+  finish: (failure?: string) => Promise<void>,
+  stopped: (error: unknown) => string,
+): Response {
+  const ending = answer.ok ? undefined : `HTTP ${answer.status}`;
+  if (!answer.body) {
+    void finish(ending);
+    return answer;
+  }
+  const reader = answer.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (!done) return controller.enqueue(value);
+        await finish(ending);
+        controller.close();
+      } catch (error) {
+        await finish(stopped(error));
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await finish('The client closed the request.');
+      await reader.cancel(reason);
+    },
+  });
+  return new Response(body, {
+    status: answer.status,
+    statusText: answer.statusText,
+    headers: answer.headers,
+  });
+}
+
+/**
+ * What the audit log records about an invocation, or `undefined` for a method
+ * that invokes nothing. A resource read names the first registration covering
+ * its URI, and carries the URI itself as `resource`.
+ */
+function auditedCall<P extends string>(
+  route: TrustedMcpRoute,
+  principal: Principal<P>,
+  permissions: ReadonlyMap<string, string>,
+  resources: ProxyResourceIndex,
+  emitter: string | undefined,
+): Omit<AuditEvent, 'type' | 'phase' | 'at'> | undefined {
+  if (!isInvocationMethod(route.method) || !route.name) return undefined;
+  const reading = route.method === 'resources/read';
+  const covering = reading ? coveringResources(resources, route.name) : [];
+  const permission = permissionForFlatMap(permissions, route, resources);
+  if (permission === undefined || (reading && covering.length === 0)) return undefined;
+  return {
+    callId: crypto.randomUUID(),
+    issuer: principal.issuer,
+    sub: principal.sub,
+    ...(principal.email ? { email: principal.email } : {}),
+    ...(principal.domain ? { domain: principal.domain } : {}),
+    ...(emitter ? { emitter } : {}),
+    kind: route.method === 'tools/call' ? 'tool' : route.method === 'prompts/get' ? 'prompt' : 'resource',
+    name: reading ? covering[0]!.label.slice('resource:'.length) : route.name,
+    permission,
+    ...(reading ? { resource: route.name } : {}),
+    decision: 'allow',
+  };
+}
+
+/** A terminal write happens after the call reached its result, so its failure goes to `onAuditError`. */
+async function deliver(
+  sink: AuditSink,
+  onError: AuditErrorSink | undefined,
+  event: AuditEvent,
+): Promise<void> {
+  try {
+    await sink(event);
+  } catch (error) {
+    try {
+      await onError?.({ error, event });
+    } catch {
+      // An observer cannot change the result.
+    }
+  }
 }
 
 /** A `tools/call` answer, screened against the tool's approved definition. */

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import inspect
 import json
 import logging
 import re
@@ -29,7 +30,17 @@ from mcp.shared.exceptions import MCPError
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 from ._asgi import Receive, Scope, Send, denied, header, json_response, lifespan, path_of, read_body, text_response
-from .audit import AuthorizationDecisionSink, emit_decision, principal_label
+from .audit import (
+    AuditErrorSink,
+    AuditEvent,
+    AuditSink,
+    AuthorizationDecisionSink,
+    deliver_terminal_audit,
+    emit_decision,
+    new_call_id,
+    now,
+    principal_label,
+)
 from .definitions import (
     changed_fields,
     definition_of,
@@ -163,10 +174,13 @@ class McpProxy:
         required_scopes: Sequence[str] = ("mcp",),
         supported_scopes: Sequence[str] = (),
         on_decision: AuthorizationDecisionSink | None = None,
+        on_audit: AuditSink | None = None,
+        on_audit_error: AuditErrorSink | None = None,
         emitter: str | None = None,
         health_path: str = "/health",
         max_request_bytes: int = 1_048_576,
         http_client: httpx2.AsyncClient | None = None,
+        upstream_timeout: float | None = None,
     ) -> None:
         self.resource_server_url = resource_server_url.rstrip("/")
         self.upstream_url = upstream_url
@@ -179,6 +193,16 @@ class McpProxy:
         self.required_scopes = list(required_scopes)
         self.supported_scopes = sorted({*required_scopes, *supported_scopes})
         self.on_decision = on_decision
+        #: An ``attempt`` before each forwarded tool call, prompt get or resource
+        #: read, then ``success`` or ``failure`` under the same ``call_id``. When
+        #: the ``attempt`` write raises, the call does not run and the caller
+        #: gets a 503.
+        self.on_audit = on_audit
+        self.on_audit_error = on_audit_error
+        #: The most one forwarded request may take, answer included, in seconds.
+        #: Past it the proxy stops the request and answers 504. ``None`` lets a
+        #: request run as long as the client stays connected.
+        self.upstream_timeout = upstream_timeout
         self.emitter = emitter
         self.health_path = health_path
         self.max_request_bytes = max_request_bytes
@@ -311,7 +335,121 @@ class McpProxy:
         if tool is not None and not await self._arguments_match(send, tool, params, _request_id_from(body)):
             return
         await emit_decision(self.on_decision, principal, "allow", None, self.emitter)
-        await self._forward(scope, send, body, principal, method, tool)
+        await self._forward_recorded(scope, receive, send, body, principal, method, params, labels, tool)
+
+    async def _forward_recorded(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        body: bytes,
+        principal: Principal,
+        method: str,
+        params: Mapping[str, Any],
+        labels: Sequence[str],
+        tool: str | None,
+    ) -> None:
+        """Forward within the deadline, stop when the client leaves, and record the call."""
+
+        request_id = _request_id_from(body)
+        event = self._audited_call(principal, method, params, labels)
+        if event is not None:
+            try:
+                await _maybe_await(self.on_audit(event("attempt")))  # type: ignore[misc]
+            except Exception:  # noqa: BLE001 - an action nobody could record does not happen
+                await _protocol_error(
+                    send, 503, -32000, "The audit log refused the write, so the call did not run.", request_id
+                )
+                return
+
+        status: int | None = None
+
+        async def watched(message: Any) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = int(message["status"])
+            await send(message)
+
+        started = time.monotonic()
+        try:
+            outcome = await self._within_deadline(receive, self._forward(scope, watched, body, principal, method, tool))
+        except Exception as raised:
+            if event is not None:
+                await deliver_terminal_audit(self.on_audit, self.on_audit_error, event("failure", started, str(raised)))
+            raise
+
+        failed: str | None = None
+        if outcome == "timeout":
+            failed = f"The upstream did not answer within {self.upstream_timeout}s."
+            if status is None:
+                await _protocol_error(send, 504, -32000, failed, request_id)
+            else:
+                await send({"type": "http.response.body", "body": b""})
+        elif outcome == "disconnected":
+            failed = "The client closed the request."
+        elif status is None or status >= 400:
+            failed = f"HTTP {status}"
+        if event is not None:
+            await deliver_terminal_audit(
+                self.on_audit,
+                self.on_audit_error,
+                event("failure" if failed else "success", started, failed),
+            )
+
+    async def _within_deadline(self, receive: Receive, forward: Awaitable[None]) -> str:
+        """``done``, ``timeout`` or ``disconnected``, stopping the forward on either of the last two."""
+
+        forwarding = asyncio.ensure_future(forward)
+        hangup = asyncio.ensure_future(_disconnected(receive))
+        try:
+            done, _ = await asyncio.wait(
+                {forwarding, hangup}, timeout=self.upstream_timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            for task in (forwarding, hangup):
+                task.cancel()
+            await asyncio.gather(forwarding, hangup, return_exceptions=True)
+        if forwarding in done:
+            forwarding.result()
+            return "done"
+        return "disconnected" if hangup in done else "timeout"
+
+    def _audited_call(
+        self, principal: Principal, method: str, params: Mapping[str, Any], labels: Sequence[str]
+    ) -> Callable[..., AuditEvent] | None:
+        """How to record this call, or ``None`` when nothing listens or the method invokes nothing.
+
+        A resource read names the first registration covering its URI, and
+        carries the URI itself as ``resource``.
+        """
+
+        kinds = {"tools/call": "tool", "prompts/get": "prompt", "resources/read": "resource"}
+        if self.on_audit is None or method not in kinds or not labels:
+            return None
+        label = labels[0]
+        named = params.get("uri" if method == "resources/read" else "name")
+        call_id = new_call_id()
+
+        def event(phase: str, started: float | None = None, error: str | None = None) -> AuditEvent:
+            return AuditEvent(
+                call_id=call_id,
+                issuer=principal.issuer,
+                sub=principal.sub,
+                email=principal.email,
+                domain=principal.domain,
+                emitter=self.emitter,
+                kind=kinds[method],
+                name=label.split(":", 1)[1] if ":" in label else label,
+                permission=self.permissions[label],
+                resource=named if method == "resources/read" and isinstance(named, str) else None,
+                decision="allow",
+                phase=phase,
+                at=now(),
+                duration_ms=None if started is None else (time.monotonic() - started) * 1000,
+                error=error,
+            )
+
+        return event
 
     async def _arguments_match(
         self, send: Send, tool: str, params: Mapping[str, Any], request_id: str | int | None
@@ -631,19 +769,24 @@ class McpProxy:
         }
         body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
         try:
-            response = await client.send(
-                client.build_request("POST", self.upstream_url, headers=headers, content=body), stream=True
-            )
-            try:
-                raw = await _read_capped(response, self.max_request_bytes)
-            finally:
-                await response.aclose()
-        except httpx2.HTTPError:
+            raw, response = await asyncio.wait_for(self._read_own(client, headers, body), self.upstream_timeout)
+        except (httpx2.HTTPError, asyncio.TimeoutError):
             logger.warning("mcp-authz proxy: could not read %s from the upstream", method, exc_info=True)
             return None
         if raw is None or not response.is_success:
             return None
         return _result_of(raw, response.headers.get("content-type", ""))
+
+    async def _read_own(
+        self, client: httpx2.AsyncClient, headers: Mapping[str, str], body: bytes
+    ) -> tuple[bytes | None, httpx2.Response]:
+        response = await client.send(
+            client.build_request("POST", self.upstream_url, headers=headers, content=body), stream=True
+        )
+        try:
+            return await _read_capped(response, self.max_request_bytes), response
+        finally:
+            await response.aclose()
 
     async def _bearer(self) -> str:
         bearer = self.upstream_bearer() if callable(self.upstream_bearer) else self.upstream_bearer
@@ -722,9 +865,7 @@ class McpProxy:
             # A body this cannot read is one it cannot hide anything from or
             # check. Passing it through would serve the full catalogue to
             # everyone the day an upstream changes its content type.
-            await _unfilterable(
-                send, f"{method} came back as '{content_type or 'no content type'}'", request_id
-            )
+            await _unfilterable(send, f"{method} came back as '{content_type or 'no content type'}'", request_id)
             return
 
         raw = await _read_capped(response, limit)
@@ -735,9 +876,7 @@ class McpProxy:
         except json.JSONDecodeError:
             filtered = None
         if filtered is None:
-            await _unfilterable(
-                send, f"{method} was over {limit} bytes or not readable as JSON-RPC", request_id
-            )
+            await _unfilterable(send, f"{method} was over {limit} bytes or not readable as JSON-RPC", request_id)
             return
         # The upstream's own headers survive — a session id belongs to the
         # client, not to us — minus the framing that described the body we
@@ -794,9 +933,7 @@ class McpProxy:
         )
 
 
-def _resource_index(
-    permissions: Mapping[str, str], resource_uris: Mapping[str, str] | None
-) -> list[_ResourceEntry]:
+def _resource_index(permissions: Mapping[str, str], resource_uris: Mapping[str, str] | None) -> list[_ResourceEntry]:
     """Match each priced ``resource:`` label to the URIs it covers.
 
     Exact URIs are tried before templates, so a resource registered at its own
@@ -821,7 +958,7 @@ def _resource_index(
             + "\n\nPass `resource_uris` mapping each label to its uri or uriTemplate. List the "
             "upstream once with mcp.client.Client to read them off it."
         )
-    for label in (resource_uris or {}):
+    for label in resource_uris or {}:
         if label not in permissions:
             raise ValueError(f"resource_uris key '{label}' names no priced capability.")
     return sorted(entries, key=lambda entry: entry.templated)
@@ -951,9 +1088,7 @@ async def _stream_events(
             "headers": headers,
         }
     )
-    async for piece in _filtered_events(
-        response.aiter_bytes(), filter_payload, max_event_bytes, method, request_id
-    ):
+    async for piece in _filtered_events(response.aiter_bytes(), filter_payload, max_event_bytes, method, request_id):
         await send({"type": "http.response.body", "body": piece, "more_body": True})
     await send({"type": "http.response.body", "body": b""})
 
@@ -1005,8 +1140,10 @@ async def _filtered_events(
         filtered = filter_payload(payload)
         if filtered is payload:
             return block  # untouched: sent as it arrived
-        replaced = filtered if filtered is not None else _unfilterable_body(
-            f"{method} carried an unrecognisable event", request_id
+        replaced = (
+            filtered
+            if filtered is not None
+            else _unfilterable_body(f"{method} carried an unrecognisable event", request_id)
         )
         return "\n".join([*rest, f"data: {dumps_exact(replaced)}"])
 
@@ -1173,9 +1310,21 @@ async def _unfilterable(send: Send, because: str, request_id: str | int | None) 
     await json_response(send, 502, _unfilterable_body(because, request_id))
 
 
+async def _disconnected(receive: Receive) -> None:
+    """Returns once the client has gone. The request body is already read."""
+
+    while (await receive())["type"] != "http.disconnect":
+        pass
+
+
+async def _maybe_await(result: object) -> None:
+    """A sink may be sync or async: a logger call is not worth a coroutine."""
+
+    if inspect.isawaitable(result):
+        await result
+
+
 async def _protocol_error(
     send: Send, status: int, code: int, message: str, request_id: str | int | None = None
 ) -> None:
-    await json_response(
-        send, status, {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
-    )
+    await json_response(send, status, {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})

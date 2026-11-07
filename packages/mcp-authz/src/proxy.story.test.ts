@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { createMcpProxy } from './proxy';
 import { definePolicy } from './policy';
 import type { Definition } from './definitions';
+import type { AuditEvent, AuditSink } from './tools';
 import { recordCapabilities } from './testing';
 
 const UPSTREAM = new URL('https://upstream.vendor.com/mcp');
@@ -168,6 +169,14 @@ function proxyFixture(options: {
   rugPull?: boolean;
   definitions?: Record<string, Definition>;
   instructions?: string;
+  /** A tool whose calls the upstream never answers, until the request is stopped. */
+  stall?: string;
+  /** A tool or resource whose answer starts at once, then never finishes, until the request is stopped. */
+  stallBody?: string;
+  /** A tool whose calls the upstream answers with a 500. */
+  fail?: string;
+  timeoutMs?: number;
+  onAudit?: AuditSink;
 }) {
   const upstreamHandler = createMcpHandler(
     () =>
@@ -178,11 +187,39 @@ function proxyFixture(options: {
   );
   let upstreamCalls = 0;
   const forwarded: string[] = [];
+  const stopped: AbortSignal[] = [];
   const upstreamFetch =
     options.upstreamFetch ??
     ((async (input: string | URL | Request, init?: RequestInit) => {
       upstreamCalls += 1;
       const source = input instanceof Request ? input : new Request(String(input), init);
+      if (options.stall && source.headers.get('mcp-name') === options.stall) {
+        stopped.push(source.signal);
+        return new Promise<Response>((_, reject) =>
+          source.signal.addEventListener('abort', () => reject(source.signal.reason), { once: true }),
+        );
+      }
+      if (options.stallBody && source.headers.get('mcp-name') === options.stallBody) {
+        stopped.push(source.signal);
+        // What fetch does to a body when its signal aborts mid-read.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0",'));
+            source.signal.addEventListener(
+              'abort',
+              () => controller.error(new DOMException('This operation was aborted', 'AbortError')),
+              { once: true },
+            );
+          },
+        });
+        return new Response(body, { headers: { 'content-type': 'application/json' } });
+      }
+      if (options.fail && source.headers.get('mcp-name') === options.fail) {
+        return Response.json(
+          { jsonrpc: '2.0', id: 1, error: { code: -32_603, message: 'boom' } },
+          { status: 500 },
+        );
+      }
       const rewritten = new Request(source.url.replace(PROXY.href, UPSTREAM.href), source);
       if (rewritten.method.toUpperCase() === 'POST') forwarded.push(await rewritten.clone().text());
       return upstreamHandler.fetch(rewritten);
@@ -203,14 +240,16 @@ function proxyFixture(options: {
     resourceUris: options.resourceUris ?? RESOURCE_URIS,
     ...(options.maxRequestBytes ? { maxRequestBytes: options.maxRequestBytes } : {}),
     ...(options.capabilityScopes ? { capabilityScopes: options.capabilityScopes } : {}),
+    ...(options.onAudit ? { onAudit: options.onAudit } : {}),
     upstream: {
       url: UPSTREAM.href,
       bearer: 'service-token',
       fetch: upstreamFetch,
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
     },
   });
 
-  return { proxy, upstreamCalls: () => upstreamCalls, forwarded };
+  return { proxy, upstreamCalls: () => upstreamCalls, forwarded, stopped };
 }
 
 const names = <T extends { name: string }>(list: T[]) => list.map((entry) => entry.name).sort();
@@ -1515,4 +1554,169 @@ describe('createMcpProxy', () => {
     story.then('the byte cap still refuses it, counted over the reassembled event');
     expect(body).toContain('could not be filtered');
   }, 20_000);
+});
+
+describe('createMcpProxy deadlines and audit', () => {
+  const getCase = () =>
+    rpc('tools/call', { name: 'get_case', arguments: { id: 'C1' } }, { name: 'get_case' });
+
+  it('stops a forwarded call at the deadline and answers 504', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'operations'], covers: ['src/proxy.ts', 'src/upstream.ts'] });
+    stubJwks();
+    const events: AuditEvent[] = [];
+    const { proxy, stopped } = proxyFixture({
+      stall: 'get_case',
+      timeoutMs: 50,
+      onAudit: (event) => void events.push(event),
+    });
+
+    story.given('an upstream that never answers get_case, and a 50ms deadline');
+    story.when('the reader calls get_case');
+    const response = await proxy(await getCase());
+    const body = (await response.json()) as { id: unknown; error: { message: string } };
+    story.code({ label: 'What the client receives', content: JSON.stringify(body), lang: 'json' });
+
+    story.then('the proxy stops the upstream request and records the call as a failure');
+    expect(response.status).toBe(504);
+    expect(body.id).toBe(1);
+    expect(body.error.message).toBe('The upstream did not answer within 50ms.');
+    expect(stopped[0]?.aborted).toBe(true);
+    expect(events.map((event) => event.phase)).toEqual(['attempt', 'failure']);
+  });
+
+  it('stops the upstream request when the client hangs up', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'operations'], covers: ['src/proxy.ts', 'src/upstream.ts'] });
+    stubJwks();
+    const { proxy, stopped } = proxyFixture({ stall: 'get_case' });
+    const client = new AbortController();
+
+    story.given('an upstream that never answers get_case, and no deadline');
+    story.when('the client disconnects while the call is in flight');
+    const answer = proxy(new Request(await getCase(), { signal: client.signal }));
+    await vi.waitFor(() => expect(stopped).toHaveLength(1));
+    client.abort();
+
+    story.then('the proxy cancels the request it made to the upstream');
+    expect((await answer).status).toBe(499);
+    expect(stopped[0]?.aborted).toBe(true);
+  });
+
+  it('records a forwarded call as an attempt and its outcome, under one callId', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'audit'], covers: ['src/proxy.ts'] });
+    stubJwks();
+    const events: AuditEvent[] = [];
+    const { proxy } = proxyFixture({ onAudit: (event) => void events.push(event) });
+    const client = await connect(proxy, await token('dana@acme.com'));
+
+    story.when('the reader lists the tools, calls get_case and reads a case');
+    await client.listTools();
+    await client.callTool({ name: 'get_case', arguments: { id: 'C1' } });
+    await client.readResource({ uri: 'cases://case/C1' });
+    await client.close();
+    story.code({ label: 'onAudit', content: JSON.stringify(events, null, 2), lang: 'json' });
+
+    story.then('each invocation is an attempt and a success; the listing records nothing');
+    expect(events.map(({ kind, name, phase }) => `${kind} ${name} ${phase}`)).toEqual([
+      'tool get_case attempt',
+      'tool get_case success',
+      'resource case attempt',
+      'resource case success',
+    ]);
+    expect(events[0]).toMatchObject({
+      type: 'mcp_authz.audit.v1',
+      issuer: ISSUER,
+      sub: 'auth0|dana@acme.com',
+      email: 'dana@acme.com',
+      permission: 'cases:read',
+      decision: 'allow',
+    });
+    expect(events[1]!.callId).toBe(events[0]!.callId);
+    expect(events[2]!.callId).not.toBe(events[0]!.callId);
+    expect(events[3]).toMatchObject({ resource: 'cases://case/C1' });
+    expect(events[1]!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('records an upstream error status as a failure', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'audit'], covers: ['src/proxy.ts'] });
+    stubJwks();
+    const events: AuditEvent[] = [];
+    const { proxy } = proxyFixture({ fail: 'get_case', onAudit: (event) => void events.push(event) });
+
+    story.when('the upstream answers get_case with a 500');
+    await (await proxy(await getCase())).text();
+
+    story.then('the call is recorded as a failure carrying the status');
+    expect(events.map(({ phase, error }) => [phase, error])).toEqual([
+      ['attempt', undefined],
+      ['failure', 'HTTP 500'],
+    ]);
+  });
+
+  it('answers 504 when the deadline falls while the answer is still arriving', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'operations'], covers: ['src/proxy.ts', 'src/upstream.ts'] });
+    stubJwks();
+    const events: AuditEvent[] = [];
+    const { proxy } = proxyFixture({
+      stallBody: 'get_case',
+      timeoutMs: 50,
+      onAudit: (event) => void events.push(event),
+    });
+
+    story.given('an upstream that sends get_case headers at once, then stalls mid-body');
+    story.when('the reader calls get_case with a 50ms deadline');
+    const response = await proxy(await getCase());
+    const body = (await response.json()) as { id: unknown; error: { message: string } };
+
+    story.then('the client gets a 504 carrying its request id, and the call is a failure');
+    expect(response.status).toBe(504);
+    expect(body.id).toBe(1);
+    expect(body.error.message).toBe('The upstream did not answer within 50ms.');
+    expect(events.map(({ phase, error }) => [phase, error])).toEqual([
+      ['attempt', undefined],
+      ['failure', 'The upstream did not answer within 50ms.'],
+    ]);
+  });
+
+  it('records the outcome when the answer has arrived, not when its headers do', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'audit'], covers: ['src/proxy.ts'] });
+    stubJwks();
+    const events: AuditEvent[] = [];
+    const { proxy } = proxyFixture({
+      stallBody: 'cases://all',
+      timeoutMs: 50,
+      onAudit: (event) => void events.push(event),
+    });
+
+    story.given('a resource read whose answer streams through unscreened, and stalls mid-body');
+    const response = await proxy(await readRequest(await token('dana@acme.com'), 'cases://all'));
+    story.then('headers alone record nothing past the attempt');
+    expect(response.status).toBe(200);
+    expect(events.map((event) => event.phase)).toEqual(['attempt']);
+
+    story.when('the deadline falls while the client reads the body');
+    await expect(response.text()).rejects.toThrow();
+
+    story.then('the call is recorded as a failure, with the deadline as the reason');
+    expect(events.map(({ phase, error }) => [phase, error])).toEqual([
+      ['attempt', undefined],
+      ['failure', 'The upstream did not answer within 50ms.'],
+    ]);
+  });
+
+  it('does not run a call the audit log refused to record', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'audit', 'security'], covers: ['src/proxy.ts'] });
+    stubJwks();
+    const { proxy, forwarded } = proxyFixture({
+      onAudit: () => {
+        throw new Error('log store unavailable');
+      },
+    });
+
+    story.when('the audit sink throws on the attempt');
+    const response = await proxy(await getCase());
+
+    story.then('the caller gets a 503 and the upstream never sees the call');
+    expect(response.status).toBe(503);
+    expect(forwarded.some((body) => body.includes('"tools/call"'))).toBe(false);
+  });
 });

@@ -74,6 +74,11 @@ they happen in different places, so wire both.
 `tool`, `prompt`, `resource`, or `operation` for HTTP operations gated through
 the OpenAPI entry point, so one query covers both surfaces of a product.
 
+`createMcpProxy` emits the same events for each forwarded `tools/call`,
+`prompts/get` and `resources/read`. A non-2xx answer, the deadline, a client
+that hangs up and a network error each end in `failure`, with `error` saying
+which.
+
 ### The attempt write is the fail-closed one
 
 It is awaited, and a rejection stops the call before it runs — an action nobody

@@ -661,7 +661,9 @@ export default createMcpProxy({
   upstream: {
     url: process.env.UPSTREAM_URL!,
     bearer: process.env.UPSTREAM_TOKEN!,
+    timeoutMs: 30_000, // 504 past it, answer included
   },
+  onAudit: (event) => auditLog.write(event), // attempt, then success | failure
 });
 ```
 
@@ -703,6 +705,13 @@ addressed to the model arrives after a notice to treat it as data. That notice
 is not a guarantee, and nothing verifies what a remote tool actually does; keep
 the service credential to least privilege. The caller's
 `Authorization` and `Cookie` stay at the edge.
+
+`upstream.timeoutMs` caps one forwarded request, and the proxy passes the
+incoming request's `signal` on, so a client that disconnects stops the upstream
+request too. The proxy never retries. `onAudit` receives the
+`mcp_authz.audit.v1` events embed mode emits, for each forwarded `tools/call`,
+`prompts/get` and `resources/read`. When the `attempt` write throws, the call
+does not run and the caller gets a `503`.
 
 See [proxy mode](https://jagreehal.github.io/mcp-authz/typescript/proxy/) and the
 [`proxy-example`](../../apps/proxy-example) app.

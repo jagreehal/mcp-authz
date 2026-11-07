@@ -143,6 +143,25 @@ tools/list` over a `tools/call` body is a smuggling attempt, not a hint.
 no-store`; `ETag`, `Last-Modified` and `Expires` are removed from rewritten
   bodies.
 
+### Deadlines, cancellation and audit
+
+```ts
+createMcpProxy({
+  // …
+  upstream: { url, bearer, timeoutMs: 30_000 }, // 504 past it; also bounds the proxy's own listing
+  onAudit: (event) => auditLog.write(event), // attempt, then success | failure, one callId
+  onAuditError: ({ event }) => retryQueue.push(event),
+});
+```
+
+The proxy passes the incoming request's `signal` to the upstream, so a client
+that disconnects stops the forwarded request. It never retries: a `504` on a
+write is an unknown outcome. Audit covers `tools/call`, `prompts/get` and
+`resources/read`; the terminal event waits until the client has read the whole
+answer. A refused `attempt` write returns `503` and the call never reaches the
+upstream. Python: `upstream_timeout` (seconds), `on_audit`,
+`on_audit_error`.
+
 ### What reaches the upstream
 
 The caller's `Authorization` is replaced with the service credential, and their

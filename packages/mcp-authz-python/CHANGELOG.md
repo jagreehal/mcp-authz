@@ -6,6 +6,16 @@ else moves independently.
 
 ## Unreleased
 
+The proxy, new:
+
+- **`upstream_timeout`** caps how long one forwarded request may take, answer
+  included, and answers `504` past it. The proxy also stops the upstream request
+  when the client disconnects.
+- **`on_audit` and `on_audit_error`** record each forwarded tool call, prompt
+  get and resource read as `mcp_authz.audit.v1` events: an `attempt`, then
+  `success` or `failure` under one `call_id`. A refused `attempt` write stops
+  the call with a `503`.
+
 The proxy, breaking:
 
 - **`McpProxy` requires `definitions`.** A capability whose live definition

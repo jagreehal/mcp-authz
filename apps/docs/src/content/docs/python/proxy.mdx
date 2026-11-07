@@ -27,11 +27,26 @@ app = McpProxy(
     authorization_servers=["https://auth.acme.com"],
     emitter="cases-proxy",
     on_decision=lambda event: log.warning("access", extra=event.to_dict()),
+    on_audit=lambda event: audit_log.write(event.to_dict()),
+    upstream_timeout=30.0,        # seconds; unset waits as long as the client
 )
 ```
 
 An ASGI app: run it under uvicorn, or mount it beside whatever already serves
 your other routes.
+
+## Deadlines, cancellation and audit
+
+`upstream_timeout` caps how long one forwarded request may take, answer
+included. Past it the proxy stops the upstream request and answers `504`. When
+the client disconnects, the proxy stops the upstream request too. The proxy
+never retries, so treat a `504` on a write as an unknown outcome.
+
+`on_audit` receives `mcp_authz.audit.v1` events: an `attempt` before each
+forwarded tool call, prompt get or resource read, then `success` or `failure`
+under the same `call_id`. When the `attempt` write raises, the call does not run
+and the caller gets a `503`. A terminal write that raises goes to
+`on_audit_error`. These are the TypeScript proxy's events, key for key.
 
 ## It is stricter than the in-process seams
 

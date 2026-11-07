@@ -1,6 +1,6 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { changedFields, definitionOf, INSTRUCTIONS, listCatalogue, type Definition } from './definitions';
-import type { UpstreamConfig } from './upstream';
+import { deadlineAfter, upstreamSignal, type UpstreamConfig } from './upstream';
 
 /**
  * An upstream held to the definitions recorded when its permission map was
@@ -99,8 +99,13 @@ export function holdToRecord(
 /** The upstream's catalogue, read with the service credential as a 2026-07-28 client. */
 async function listUpstream(upstream: UpstreamConfig): Promise<Map<string, Record<string, unknown>>> {
   const bearer = typeof upstream.bearer === 'function' ? upstream.bearer : () => upstream.bearer as string;
+  const fetchFn = upstream.fetch ?? fetch;
   const transport = new StreamableHTTPClientTransport(new URL(upstream.url), {
-    ...(upstream.fetch ? { fetch: upstream.fetch } : {}),
+    // The proxy's own listing is held to the same deadline as a forwarded call.
+    fetch: ((input: string | URL, init?: RequestInit) => {
+      const signal = upstreamSignal(init?.signal ?? undefined, deadlineAfter(upstream.timeoutMs));
+      return fetchFn(input, { ...init, ...(signal ? { signal } : {}) });
+    }) as typeof fetch,
     authProvider: { token: async () => bearer() },
   });
   const client = new Client(
