@@ -1,0 +1,35 @@
+{
+  "name": "mcp-authz-login-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "createMcpProxy behind Google, Microsoft, Okta, Clerk or GitHub sign-in, proven end to end against emulators",
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx watch src/node.ts",
+    "start": "node dist/node.js",
+    "lint": "eslint src",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "mcp-authz": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.0",
+    "@types/node": "^26.6.4",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "emulate": "^0.13.0",
+    "mcp-authz-test-server": "workspace:*",
+    "tsdown": "^0.23.0",
+    "tsx": "^4.23.15",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

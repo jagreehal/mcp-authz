@@ -149,6 +149,49 @@ The caller's `Authorization` is replaced with the service credential, and their
 `Cookie` is dropped along with the hop-by-hop headers — including the ones the
 `Connection` header names. `/health` reports counts, never the upstream address.
 
+### Sign-in with no authorization server
+
+A provider with opaque access tokens (Google, Microsoft, Okta, Clerk, GitHub)
+can sit in front of the proxy. Pass a `tokenVerifier` that asks the provider
+two things: whether it issued the token for this server, and whose it is.
+Advertise the scopes the identity lookup needs as `requiredScopes`.
+
+```ts
+createMcpProxy({
+  resourceServerUrl,
+  oauthMetadata: provider.oauthMetadata, // the provider's authorize and token endpoints
+  requiredScopes: provider.scopes, // e.g. ['user:email'] for GitHub
+  tokenVerifier: {
+    async verifyAccessToken(token) {
+      if (!(await provider.issuedHere(token)))
+        throw new OAuthError(OAuthErrorCode.InvalidToken, 'Wrong audience');
+      const who = await provider.whoIs(token);
+      return {
+        token,
+        clientId: provider.name,
+        scopes: provider.scopes,
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        resource: resourceServerUrl,
+        extra: { issuer: provider.oauthMetadata.issuer, ...who }, // sub, email, emailVerified, domain, claims
+      };
+    },
+  },
+  policy, // rules: [{ match: { domain: 'foo.com' }, role: 'reader' }]
+  permissions: PERMISSIONS,
+  definitions: DEFINITIONS,
+  resourceUris: RESOURCE_URIS,
+  upstream,
+});
+```
+
+`issuedHere` per provider: Okta introspection returns `aud`, which must equal
+the MCP URL. Google `tokeninfo` and GitHub `POST /applications/{client_id}/token`
+tie the token to your client ID. Set `emailVerified` from the provider's own
+flag, since `email` and `domain` rules match only a verified address. For
+Microsoft, use Graph's `userPrincipalName`.
+
+Source: apps/login-example/src/providers.ts
+
 ## Common Mistakes
 
 ### CRITICAL Assuming the request size cap only bounds requests

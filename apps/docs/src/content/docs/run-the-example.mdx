@@ -144,3 +144,24 @@ Without the Mailbox credentials the server lists the three Docs tools. With
 them it adds four Mailbox tools. The Help Scout keys never leave the process.
 See the
 [example README](https://github.com/jagreehal/mcp-authz/tree/main/apps/helpscout-example).
+
+## People who sign in with Google, Microsoft, Okta, Clerk or GitHub
+
+`apps/login-example` puts `createMcpProxy` behind a sign-in provider your team
+already uses. You run no authorization server. For each token, a custom
+`tokenVerifier` asks the provider whether it issued the token for this server
+and whose it is. One policy then decides what each person sees.
+
+```bash
+pnpm --filter mcp-authz-login-example test
+```
+
+The test starts an emulator for each of the five providers. It signs in as
+`dana@foo.com`, who gets the read tools, `alice@foo.com`, who also gets the write
+tools, and `sam@other.com`, who gets a 403.
+
+To run it against a provider, register an OAuth app for this server and set
+`PROVIDER`, `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`. Okta binds each token
+to your MCP URL through introspection. Google and GitHub bind it to your client
+ID. See the
+[example README](https://github.com/jagreehal/mcp-authz/tree/main/apps/login-example).

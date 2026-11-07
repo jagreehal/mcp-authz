@@ -20,7 +20,10 @@ overrides:
   hono@<4.13.5: ^4.13.5
   sharp@<0.35.4: ^0.35.4
   lodash-es@<4.18.1: ^4.18.1
-  undici@>=8.1.0 <8.10.2: ^8.10.2
+  undici@>=8.0.0 <8.12.2: ^8.12.2
+  zod@<4.6.6: ^4.6.6
+  vite@>=8.3.0 <8.3.3: ^8.3.3
+  dompurify@<3.4.17: ^3.4.17
 
 # No http-cache-semantics release fixes GHSA-ch52-4w7c-c8xp yet (4.2.0 is the
 # latest). It reaches this repo only through Astro in the private docs site,
