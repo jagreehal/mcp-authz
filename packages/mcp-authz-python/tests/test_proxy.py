@@ -14,7 +14,7 @@ import httpx2
 import pytest
 from mcp.server.auth.provider import AccessToken
 
-from mcp_authz import AuthorizationDecisionEvent, define_policy
+from mcp_authz import AuditEvent, AuthorizationDecisionEvent, define_policy
 from mcp_authz import proxy as proxy_module
 from mcp_authz.proxy import McpProxy
 
@@ -97,6 +97,9 @@ class _Upstream:
         self.listings: dict[str, list[dict[str, Any]]] = {method: [page] for method, page in LISTINGS.items()}
         #: How the proxy's own reads are answered: "json", "sse", "down" or "500".
         self.own_as = "json"
+        #: A caller's request the upstream never answers, until the proxy stops it.
+        self.stall = False
+        self.stopped = 0
 
     def client(self) -> httpx2.AsyncClient:
         async def handle(request: httpx2.Request) -> httpx2.Response:
@@ -105,6 +108,12 @@ class _Upstream:
             client_info = body.get("params", {}).get("_meta", {}).get("io.modelcontextprotocol/clientInfo", {})
             if client_info.get("name") != "mcp-authz-proxy":
                 self.requests.append(request)
+                if self.stall:
+                    try:
+                        await asyncio.sleep(3600)
+                    except asyncio.CancelledError:
+                        self.stopped += 1
+                        raise
                 return self.response
             self.own.append(request)
             await asyncio.sleep(0)  # let a concurrent caller arrive while this read is in flight
@@ -1206,3 +1215,130 @@ def test_dumps_exact_writes_any_decimal_by_value() -> None:
     assert dumps_exact({"a": Decimal("0.1"), "b": [loads_exact("2.50")]}) == '{"a": 0.1, "b": [2.50]}'
     with pytest.raises(TypeError):
         dumps_exact({"a": object()})
+
+
+class TestDeadlinesAndAudit:
+    async def test_stops_a_forwarded_call_at_the_deadline_and_answers_504(self) -> None:
+        upstream = _Upstream()
+        upstream.stall = True
+        events: list[AuditEvent] = []
+        proxy = _proxy(upstream, upstream_timeout=0.05, on_audit=events.append)
+
+        response = await _rpc(proxy, "tools/call", {"name": "get_case"})
+
+        assert response.status_code == 504
+        assert response.json()["id"] == 1
+        assert response.json()["error"]["message"] == "The upstream did not answer within 0.05s."
+        assert upstream.stopped == 1
+        assert [event.phase for event in events] == ["attempt", "failure"]
+
+    async def test_answers_504_when_the_deadline_falls_while_the_answer_is_arriving(self) -> None:
+        async def stalled() -> AsyncIterator[bytes]:
+            yield b'{"jsonrpc":"2.0",'
+            await asyncio.sleep(3600)
+
+        upstream = _Upstream(httpx2.Response(200, headers={"content-type": "application/json"}, content=stalled()))
+        events: list[AuditEvent] = []
+        proxy = _proxy(upstream, upstream_timeout=0.05, on_audit=events.append)
+
+        response = await _rpc(proxy, "tools/call", {"name": "get_case"})
+
+        assert response.status_code == 504
+        assert response.json()["id"] == 1
+        assert [(event.phase, event.error) for event in events] == [
+            ("attempt", None),
+            ("failure", "The upstream did not answer within 0.05s."),
+        ]
+
+    async def test_stops_the_upstream_request_when_the_client_hangs_up(self) -> None:
+        upstream = _Upstream()
+        upstream.stall = True
+        proxy = _proxy(upstream)
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_case",
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": MODERN,
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
+                },
+            }
+        ).encode()
+        gone = asyncio.Event()
+        messages: list[dict[str, Any]] = [{"type": "http.request", "body": body, "more_body": False}]
+
+        async def receive() -> dict[str, Any]:
+            if messages:
+                return messages.pop(0)
+            await gone.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: Any) -> None:
+            pass
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"authorization", b"Bearer dana@acme.com"),
+                (b"content-type", b"application/json"),
+                (b"mcp-protocol-version", MODERN.encode()),
+                (b"mcp-method", b"tools/call"),
+                (b"mcp-name", b"get_case"),
+            ],
+        }
+        call = asyncio.ensure_future(proxy(cast(Any, scope), receive, send))
+        while not upstream.requests:
+            await asyncio.sleep(0.01)
+        gone.set()
+        await asyncio.wait_for(call, 1)
+
+        assert upstream.stopped == 1
+
+    async def test_records_a_forwarded_call_as_an_attempt_and_its_outcome(self) -> None:
+        events: list[AuditEvent] = []
+        proxy = _proxy(on_audit=events.append)
+
+        await _rpc(proxy, "tools/list")
+        await _rpc(proxy, "tools/call", {"name": "get_case", "arguments": {"id": "C1"}})
+        await _rpc(proxy, "resources/read", {"uri": "cases://all"})
+
+        assert [f"{event.kind} {event.name} {event.phase}" for event in events] == [
+            "tool get_case attempt",
+            "tool get_case success",
+            "resource cases attempt",
+            "resource cases success",
+        ]
+        first = events[0].to_dict()
+        assert first["type"] == "mcp_authz.audit.v1"
+        assert first["sub"] == "auth0|dana@acme.com"
+        assert first["permission"] == "cases:read"
+        assert events[1].call_id == events[0].call_id
+        assert events[2].call_id != events[0].call_id
+        assert events[3].resource == "cases://all"
+        assert events[1].duration_ms is not None
+
+    async def test_records_an_upstream_error_status_as_a_failure(self) -> None:
+        events: list[AuditEvent] = []
+        upstream = _Upstream(httpx2.Response(500, json={"jsonrpc": "2.0", "id": 1, "error": {"code": -32603}}))
+        proxy = _proxy(upstream, on_audit=events.append)
+
+        await _rpc(proxy, "tools/call", {"name": "get_case"})
+
+        assert [(event.phase, event.error) for event in events] == [("attempt", None), ("failure", "HTTP 500")]
+
+    async def test_does_not_run_a_call_the_audit_log_refused_to_record(self) -> None:
+        upstream = _Upstream()
+
+        def refuse(event: AuditEvent) -> None:
+            raise RuntimeError("log store unavailable")
+
+        response = await _rpc(_proxy(upstream, on_audit=refuse), "tools/call", {"name": "get_case"})
+
+        assert response.status_code == 503
+        assert upstream.requests == []

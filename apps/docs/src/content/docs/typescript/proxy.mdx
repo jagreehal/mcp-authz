@@ -101,7 +101,9 @@ The handler is a `fetch` function. Bind it with
 | `permissions`                | Required flat map — same labels as `gate()` and `recordCapabilities`   |
 | `definitions`                | Required — the recorded `DEFINITIONS`, held to on listings and calls   |
 | `resourceUris`               | Each `resource:` label to the URI or template it answers on            |
-| `upstream`                   | Upstream base URL and service bearer                                   |
+| `upstream`                   | Upstream base URL, service bearer and optional `timeoutMs`             |
+| `onAudit` / `onAuditError`   | `mcp_authz.audit.v1` events for each forwarded invocation              |
+| `onDecision`                 | `mcp_authz.decision.v1` events for each allow and deny                 |
 | `capabilityScopes`           | Optional per-capability OAuth step-up, same as embed mode              |
 | `requiredScopes`             | Baseline scopes every token must carry (default `['mcp']`)             |
 | `maxRequestBytes`            | Cap on a single message this buffers, either direction (default 1 MiB) |
@@ -294,6 +296,50 @@ returns large catalogues. A `tools/call` answer is capped at the larger of this
 and 16 MiB.
 
 </Aside>
+
+## Deadlines and cancellation
+
+Set `upstream.timeoutMs` to cap how long one forwarded request may take, answer
+included. Past it the proxy stops the upstream request and answers `504` with a
+JSON-RPC error carrying the request's `id`. When the deadline falls after the
+answer has started streaming to the client, the proxy ends that stream. The proxy's own catalogue reads use
+the same deadline.
+
+When the client disconnects, the proxy stops the upstream request too: it
+passes the incoming request's `signal` on. `listenMcp` aborts that signal when
+the connection closes, and Workers do the same.
+
+```ts
+upstream: { url, bearer, timeoutMs: 30_000 },
+```
+
+The proxy never retries. A request stopped at the deadline may still have run on
+the upstream, so treat a `504` on a write as an unknown outcome.
+
+## Audit events
+
+`onAudit` receives the same `mcp_authz.audit.v1` events as embed mode and
+`mcp-authz/openapi`: an `attempt` before each forwarded `tools/call`,
+`prompts/get` or `resources/read`, then `success` or `failure` under the same
+`callId`, with `durationMs`. The terminal event waits until the client has read
+the whole answer, so a body that stalls or breaks counts. `failure` covers a
+non-2xx answer, the deadline, the client hanging up and a network error. A tool result with `isError: true`
+is a `success`, as in embed mode.
+
+When the `attempt` write throws, the call does not run and the caller gets a
+`503`. A terminal write that throws goes to `onAuditError`. Listings record
+nothing; `onDecision` covers who saw what.
+
+```ts
+createMcpProxy({
+  // …
+  onAudit: (event) => auditLog.write(event),
+  onAuditError: ({ error, event }) => retryQueue.push(event),
+});
+```
+
+A resource read records the first registration covering its URI as `name`, and
+the URI as `resource`.
 
 ## What the proxy forwards
 

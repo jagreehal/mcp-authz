@@ -3,7 +3,30 @@ export type UpstreamConfig = {
   url: string | URL;
   bearer: string | (() => string | Promise<string>);
   fetch?: typeof fetch;
+  /**
+   * The most one forwarded request may take, answer included, in milliseconds.
+   * Past it the proxy stops the request and answers 504. Unset, a request runs
+   * as long as the client stays connected.
+   */
+  timeoutMs?: number;
 };
+
+/** A signal that aborts `timeoutMs` from now, or `undefined` for no deadline. */
+export function deadlineAfter(timeoutMs: number | undefined): AbortSignal | undefined {
+  return timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+}
+
+/**
+ * What stops a request to the upstream: the caller hanging up, or the
+ * deadline, whichever comes first.
+ */
+export function upstreamSignal(
+  caller: AbortSignal | undefined,
+  deadline: AbortSignal | undefined,
+): AbortSignal | undefined {
+  const signals = [...(caller ? [caller] : []), ...(deadline ? [deadline] : [])];
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
 
 /**
  * Headers that must not survive a hop.
@@ -28,7 +51,11 @@ const DROPPED_ON_FORWARD = new Set([
   'upgrade',
 ]);
 
-export async function forwardToUpstream(request: Request, config: UpstreamConfig): Promise<Response> {
+export async function forwardToUpstream(
+  request: Request,
+  config: UpstreamConfig,
+  deadline?: AbortSignal,
+): Promise<Response> {
   const fetchFn = config.fetch ?? fetch;
   const bearer = typeof config.bearer === 'function' ? await config.bearer() : config.bearer;
   const target = new URL(config.url);
@@ -48,10 +75,12 @@ export async function forwardToUpstream(request: Request, config: UpstreamConfig
   }
   headers.set('authorization', `Bearer ${bearer}`);
 
+  const signal = upstreamSignal(request.signal, deadline);
   const upstreamRequest = new Request(target, {
     method: request.method,
     headers,
     body: request.body,
+    ...(signal ? { signal } : {}),
     // Streaming bodies need half-duplex on Node 18+ fetch.
     duplex: 'half',
   } as RequestInit);
