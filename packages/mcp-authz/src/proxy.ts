@@ -49,7 +49,7 @@ export type McpProxyOptions<P extends string = string> = {
   tokenVerifier?: OAuthTokenVerifier;
   identityFromAuth?: (auth: AuthInfo) => Identity;
   /** URL-only upstream reached with a service credential. */
-  upstream: UpstreamConfig;
+  upstream: UpstreamConfig<P>;
   /** Flat permission map — same labels as `gate()` and `recordCapabilities`. */
   permissions: Readonly<Record<string, P>> | ReadonlyMap<string, P>;
   /**
@@ -324,7 +324,7 @@ export function createMcpProxy<P extends string = string>(
         }
         call.finish = terminalAudit(audited, options.onAudit!, options.onAuditError);
       }
-      return ok(await forwardToUpstream(request, upstream, call.deadline));
+      return ok(await forwardToUpstream(request, upstream, call.deadline, principal));
     },
 
     /** Hide from a listing what the caller could not have called anyway. */

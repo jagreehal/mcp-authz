@@ -25,9 +25,18 @@ export type Provider = {
   whoIs(token: string, fetch: Fetch): Promise<Who | undefined>;
   /**
    * Whether the provider issued the token for this server, as opposed to
-   * another app the same person uses.
+   * another app the same person uses. Undefined when it did not; otherwise
+   * when the token expires, if the provider says.
    */
-  issuedHere?(token: string, fetch: Fetch): Promise<boolean>;
+  issuedHere?(token: string, fetch: Fetch): Promise<Issued | undefined>;
+};
+
+/** A token the provider issued for this server. `expiresAt` is in epoch seconds. */
+export type Issued = { expiresAt?: number };
+
+const issued = (exp: unknown): Issued => {
+  const expiresAt = Number(exp);
+  return Number.isFinite(expiresAt) && expiresAt > 0 ? { expiresAt } : {};
 };
 
 const metadata = (issuer: string, authorize: string, token: string, scopes: string[]): OAuthMetadata => ({
@@ -87,7 +96,8 @@ export function google({ clientId, emulator }: { clientId: string; emulator?: st
       : {
           async issuedHere(token, fetch) {
             const url = `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`;
-            return (await json<{ aud?: string }>(await fetch(url)))?.aud === clientId;
+            const answer = await json<{ aud?: string; exp?: string }>(await fetch(url));
+            return answer?.aud === clientId ? issued(answer.exp) : undefined;
           },
         }),
   };
@@ -128,7 +138,12 @@ export function okta({
     oauthMetadata: metadata(base, `${base}/v1/authorize`, `${base}/v1/token`, scopes),
     whoIs: (token, fetch) => oidcUserinfo(`${base}/v1/userinfo`, token, fetch),
     async issuedHere(token, fetch) {
-      const answer = await json<{ active?: boolean; token_type?: string; aud?: string | string[] }>(
+      const answer = await json<{
+        active?: boolean;
+        token_type?: string;
+        aud?: string | string[];
+        exp?: number;
+      }>(
         await fetch(`${base}/v1/introspect`, {
           method: 'POST',
           headers: {
@@ -146,11 +161,11 @@ export function okta({
       );
       const audiences = [answer?.aud ?? []].flat();
       // Introspection reports refresh tokens as active too, so check the type.
-      return (
-        answer?.active === true &&
+      return answer?.active === true &&
         answer.token_type === 'Bearer' &&
         audiences.includes(resourceServerUrl.href)
-      );
+        ? issued(answer.exp)
+        : undefined;
     },
   };
 }
@@ -249,7 +264,8 @@ export function github({
               },
               body: JSON.stringify({ access_token: token }),
             });
-            return answer.ok;
+            // GitHub OAuth app tokens do not expire.
+            return answer.ok ? {} : undefined;
           },
         }),
   };

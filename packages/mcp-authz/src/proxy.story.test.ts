@@ -8,6 +8,7 @@ import { createMcpProxy } from './proxy';
 import { definePolicy } from './policy';
 import type { Definition } from './definitions';
 import type { AuditEvent, AuditSink } from './tools';
+import type { UpstreamConfig } from './upstream';
 import { recordCapabilities } from './testing';
 
 const UPSTREAM = new URL('https://upstream.vendor.com/mcp');
@@ -177,6 +178,7 @@ function proxyFixture(options: {
   fail?: string;
   timeoutMs?: number;
   onAudit?: AuditSink;
+  bearer?: UpstreamConfig<'cases:read' | 'cases:write'>['bearer'];
 }) {
   const upstreamHandler = createMcpHandler(
     () =>
@@ -188,11 +190,14 @@ function proxyFixture(options: {
   let upstreamCalls = 0;
   const forwarded: string[] = [];
   const stopped: AbortSignal[] = [];
+  const credentials: string[] = [];
   const upstreamFetch =
     options.upstreamFetch ??
     ((async (input: string | URL | Request, init?: RequestInit) => {
       upstreamCalls += 1;
       const source = input instanceof Request ? input : new Request(String(input), init);
+      const method = source.headers.get('mcp-method');
+      if (method) credentials.push(`${method} ${source.headers.get('authorization')}`);
       if (options.stall && source.headers.get('mcp-name') === options.stall) {
         stopped.push(source.signal);
         return new Promise<Response>((_, reject) =>
@@ -243,13 +248,13 @@ function proxyFixture(options: {
     ...(options.onAudit ? { onAudit: options.onAudit } : {}),
     upstream: {
       url: UPSTREAM.href,
-      bearer: 'service-token',
+      bearer: options.bearer ?? 'service-token',
       fetch: upstreamFetch,
       ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
     },
   });
 
-  return { proxy, upstreamCalls: () => upstreamCalls, forwarded, stopped };
+  return { proxy, upstreamCalls: () => upstreamCalls, forwarded, stopped, credentials };
 }
 
 const names = <T extends { name: string }>(list: T[]) => list.map((entry) => entry.name).sort();
@@ -1718,5 +1723,30 @@ describe('createMcpProxy deadlines and audit', () => {
     story.then('the caller gets a 503 and the upstream never sees the call');
     expect(response.status).toBe(503);
     expect(forwarded.some((body) => body.includes('"tools/call"'))).toBe(false);
+  });
+});
+
+describe('createMcpProxy upstream credential per person', () => {
+  it('forwards each call with the key the bearer function picks for that person', async ({ task }) => {
+    story.init(task, { tags: ['proxy', 'upstream'], covers: ['src/proxy.ts', 'src/upstream.ts'] });
+    stubJwks();
+    const { proxy, credentials } = proxyFixture({
+      bearer: (who) => (who ? (who.can('cases:write') ? 'write-key' : 'read-key') : 'catalogue-key'),
+    });
+
+    story.given('a bearer function that hands writers a write key and everyone else a read key');
+    story.when('the reader and the lead each call get_case');
+    for (const email of ['dana@acme.com', 'alice@acme.com']) {
+      const client = await connect(proxy, await token(email));
+      await client.callTool({ name: 'get_case', arguments: { id: 'C1' } });
+      await client.close();
+    }
+    story.code({ label: 'Credential on each upstream request', content: credentials.join('\n') });
+
+    story.then("each call reaches the upstream with that person's key; the proxy's own reads use neither");
+    const calls = credentials.filter((line) => line.startsWith('tools/call'));
+    expect(calls).toEqual(['tools/call Bearer read-key', 'tools/call Bearer write-key']);
+    expect(credentials.filter((line) => !line.includes('-key')).length).toBe(0);
+    expect(credentials.some((line) => line.endsWith('catalogue-key'))).toBe(true);
   });
 });

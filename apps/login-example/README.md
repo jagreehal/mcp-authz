@@ -49,6 +49,16 @@ A provider with no `issuedHere` check starts only when you pass
 `allowUnboundTokens: true` (`ALLOW_UNBOUND_TOKENS=1`). That flag accepts any
 token the provider issues to the person, for any app.
 
+Where the provider reports expiry (Google `tokeninfo`, Okta introspection), the
+token's `expiresAt` is the provider's, and an expired token gets a 401 so the
+client signs in again. Other providers get one hour, and the provider refuses
+an expired token at the next lookup.
+
+A verified token is remembered for a minute, never past its expiry, so a
+client's burst of requests costs one lookup. A revoked token keeps working
+until its entry lapses. Pass `cacheMs: 0` to `providerLogin` to ask the provider
+on every request.
+
 The test sends a forged token to the Google emulator (with `strict_scopes`) and
 the Okta emulator, which answer it with a 401. Each emulator gets a fixed port
 so it advertises a URL the proxy can reach.

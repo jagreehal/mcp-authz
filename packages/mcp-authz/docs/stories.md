@@ -5,362 +5,331 @@
 ### A published server somebody else wrote, gated per person
 
 ### ✅ gives a reader a catalogue that stops at what she may do
+
 Tags: `e2e`, `gate`
 
 - **Given** case-tracker 3.2.0, a server this library did not write
-    > The fixture is deliberately not a stub with one tool on it. It registers all four kinds of capability, because the three that are not tools are the ones deployments forget to gate.
-    **What the package registers**
-    
-    ```json
-    {
-      "tools": [
-        "search_cases",
-        "get_case",
-        "update_case"
-      ],
-      "prompts": [
-        "triage"
-      ],
-      "resources": [
-        "cases"
-      ],
-      "resourceTemplates": [
-        "case"
-      ]
-    }
-    ```
-    
+
+  > The fixture is deliberately not a stub with one tool on it. It registers all four kinds of capability, because the three that are not tools are the ones deployments forget to gate.
+  > **What the package registers**
+
+  ```json
+  {
+    "tools": ["search_cases", "get_case", "update_case"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
 - **And** a permission map that puts a price on every one of them
-    > gate() throws on a registration it cannot find here, so a partial map fails the boot.
-    **Permission map**
-    
-    ```json
-    {
-      "search_cases": "cases:read",
-      "get_case": "cases:read",
-      "update_case": "cases:write",
-      "close_run": "cases:write",
-      "prompt:triage": "cases:read",
-      "resource:cases": "cases:read",
-      "resource:case": "cases:read"
-    }
-    ```
-    
+
+  > gate() throws on a registration it cannot find here, so a partial map fails the boot.
+  > **Permission map**
+
+  ```json
+  {
+    "search_cases": "cases:read",
+    "get_case": "cases:read",
+    "update_case": "cases:write",
+    "close_run": "cases:write",
+    "prompt:triage": "cases:read",
+    "resource:cases": "cases:read",
+    "resource:case": "cases:read"
+  }
+  ```
+
 - **And** Dana, whom the policy makes a reader
-    > Her token is signed by the test issuer and verified against a real JWKS, like any other.
-    - **label:** Grants
-    - **value:** cases:read
+  > Her token is signed by the test issuer and verified against a real JWKS, like any other.
+  - **label:** Grants
+  - **value:** cases:read
 - **When** she connects with a real MCP client and lists all four kinds
-    > A real Client on a real Streamable HTTP transport, whose fetch is the handler. Framing, negotiation, SSE and the bearer header are the genuine article; no port is bound.
-    **Catalogue**
-    
+
+  > A real Client on a real Streamable HTTP transport, whose fetch is the handler. Framing, negotiation, SSE and the bearer header are the genuine article; no port is bound.
+  > **Catalogue**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "tools": [
-        "get_case",
-        "search_cases"
-      ],
-      "prompts": [
-        "triage"
-      ],
-      "resources": [
-        "cases"
-      ],
-      "resourceTemplates": [
-        "case"
-      ]
-    }
-    ```
-    
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
     </details>
-    
+
 - **Then** the two read tools are there, and the write tool is not
 - **And** the prompt, the resource and the template she may read all survive the gate
 - **And** what she can see, she can actually run
-    **get_case C1**
-    
-    ```text
-    case C1
-    ```
-    
+  **get_case C1**
+
+  ```text
+  case C1
+  ```
 
 ### ✅ refuses the write tool even when the client names it without listing
+
 Tags: `e2e`, `gate`, `security`
 
 - **Given** the same reader, and a client that skips tools/list entirely
-    > Absence from the catalogue is a context saving, not a security boundary. A model that guessed the name, or a malicious client that read the docs, never consults the list.
+  > Absence from the catalogue is a context saving, not a security boundary. A model that guessed the name, or a malicious client that read the docs, never consults the list.
 - **When** she calls update_case by name
-    **What the client got back**
-    
-    ```text
-    Tool update_case disabled
-    ```
-    
+  **What the client got back**
+
+  ```text
+  Tool update_case disabled
+  ```
+
 - **Then** the server refuses it, so the hidden entry was never what protected the write
 
 ### ✅ widens the same catalogue for a lead, from the same server
+
 Tags: `e2e`, `gate`
 
 - **Given** one handler, one permission map, two people
-    > Nothing about the server changes between these two connections. The only difference is which token arrives, which is the whole claim this library makes.
+  > Nothing about the server changes between these two connections. The only difference is which token arrives, which is the whole claim this library makes.
 - **When** the reader connects
-    **Catalogue**
-    
+  **Catalogue**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "tools": [
-        "get_case",
-        "search_cases"
-      ],
-      "prompts": [
-        "triage"
-      ],
-      "resources": [
-        "cases"
-      ],
-      "resourceTemplates": [
-        "case"
-      ]
-    }
-    ```
-    
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
     </details>
-    
+
 - **And** the lead connects to the very same handler
-    **Catalogue**
-    - + tools[2]: "update_case"
-    
+  **Catalogue**
+  - - tools[2]: "update_case"
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "tools": [
-        "get_case",
-        "search_cases",
-        "update_case"
-      ],
-      "prompts": [
-        "triage"
-      ],
-      "resources": [
-        "cases"
-      ],
-      "resourceTemplates": [
-        "case"
-      ]
-    }
-    ```
-    
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases", "update_case"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
     </details>
-    
+
 - **Then** update_case has appeared, and nothing else has
 - **And** it runs, so the extra grant is real and not a listing artefact
 
 ### ✅ gates a capability the server only registers on some deployments
+
 Tags: `e2e`, `gate`
 
 - **Given** the same package with its optional close_run tool switched on
-    > A real server registers a different catalogue per configuration — a feature flag, a licence tier, an env var. The map prices every branch, so turning one on cannot quietly widen what a reader sees.
+  > A real server registers a different catalogue per configuration — a feature flag, a licence tier, an env var. The map prices every branch, so turning one on cannot quietly widen what a reader sees.
 - **When** the reader and the lead each list tools
-    **Who sees the optional tool**
-    
-    | Caller | Tools |
-    | --- | --- |
-    | Dana (reader) | get_case, search_cases |
-    | Alice (lead) | close_run, get_case, search_cases, update_case |
-    
+  **Who sees the optional tool**
+
+  | Caller        | Tools                                          |
+  | ------------- | ---------------------------------------------- |
+  | Dana (reader) | get_case, search_cases                         |
+  | Alice (lead)  | close_run, get_case, search_cases, update_case |
+
 - **Then** the reader does not see it
 - **And** the lead does, because the map priced it as a write
 
 ### The same guarantees on the seam you own
 
 ### ✅ presents an authz-defined server identically to a real client
+
 Tags: `authz`, `e2e`
 
 - **Given** the same policy, over tools you declared rather than wrapped
-    > gate() is for code you cannot change; authz() is for code you wrote. This checks the two seams are indistinguishable from outside — the choice is about whose source you can reach, not about how strong the result is.
+  > gate() is for code you cannot change; authz() is for code you wrote. This checks the two seams are indistinguishable from outside — the choice is about whose source you can reach, not about how strong the result is.
 - **When** the same reader lists tools against it
-    **Catalogue**
-    
+  **Catalogue**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "tools": [
-        "get_case"
-      ]
-    }
-    ```
-    
+
+  ```json
+  {
+    "tools": ["get_case"]
+  }
+  ```
+
     </details>
-    
+
 - **Then** she sees exactly what the gated server showed her
 - **And** and the write tool is refused here too
 
 ### A client from before this protocol version
 
 ### ✅ is refused by default, and served when the deployment opts in
+
 Tags: `compatibility`, `e2e`
 
 - **Given** an unmodified SDK client, which opens with an initialize handshake
-    > Revision 2026-07-28 removed that handshake, and the client shipping today still sends it. So "legacy" here does not mean old software — it means every client you can install now.
-    [SEP-2567 — no initialize handshake](https://modelcontextprotocol.io/specification/2026-07-28)
+  > Revision 2026-07-28 removed that handshake, and the client shipping today still sends it. So "legacy" here does not mean old software — it means every client you can install now.
+  > [SEP-2567 — no initialize handshake](https://modelcontextprotocol.io/specification/2026-07-28)
 - **When** it connects to a deployment left on the default setting
-    **What the client is told**
-    
-    ```text
-    Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32022,"message":"Unsupported protocol version: 2025-11-25. No MCP client currently ships without the initialize handshake, so this refuses every client available today. Set legacy: 'stateless' to serve them.","data":{"supported":["2026-07-28"],"requested":"2025-11-25"}},"id":0}
-    ```
-    
+  **What the client is told**
+
+  ```text
+  Error POSTing to endpoint: {"jsonrpc":"2.0","error":{"code":-32022,"message":"Unsupported protocol version: 2025-11-25. No MCP client currently ships without the initialize handshake, so this refuses every client available today. Set legacy: 'stateless' to serve them.","data":{"supported":["2026-07-28"],"requested":"2025-11-25"}},"id":0}
+  ```
+
 - **Then** it is turned away, because `legacy: 'reject'` is the default
 - **And** the refusal names the setting that would serve it
-    > This is the first thing anybody wiring up the library sees go wrong, and the protocol error alone does not say that a setting exists, let alone which one.
+  > This is the first thing anybody wiring up the library sees go wrong, and the protocol error alone does not say that a setting exists, let alone which one.
 - **And** the same client is served once the deployment sets `legacy: 'stateless'`
 - **But** the gate still holds on that path — an older handshake is not a way around it
 
 ### A client that cannot prove who it is
 
 ### ✅ is turned away before any catalogue exists to filter
+
 Tags: `e2e`, `security`
 
 - **Given** a token minted for a different resource
-    > The audience check is what stops a token issued for another service being replayed here. Everything else in this file is about what a verified caller may reach; this is about not being one.
-    **Token audience**
-    
-    ```json
-    {
-      "issued_for": "https://elsewhere.example",
-      "this_server": "https://mcp.acme.com/mcp"
-    }
-    ```
-    
+
+  > The audience check is what stops a token issued for another service being replayed here. Everything else in this file is about what a verified caller may reach; this is about not being one.
+  > **Token audience**
+
+  ```json
+  {
+    "issued_for": "https://elsewhere.example",
+    "this_server": "https://mcp.acme.com/mcp"
+  }
+  ```
+
 - **When** a client connects with it
-    **What the client is told**
-    
-    ```text
-    Unauthorized
-    ```
-    
+  **What the client is told**
+
+  ```text
+  Unauthorized
+  ```
+
 - **Then** the connection fails, rather than degrading to an anonymous session
 
 ### An agent that signs in as itself
 
 ### ✅ is refused by default, since its token names no person
+
 Tags: `e2e`, `security`
 
 - **Given** a client-credentials token: a subject, and no email
-    **Token claims**
-    
-    ```json
-    {
-      "sub": "claude-tag@clients",
-      "gty": "client-credentials"
-    }
-    ```
-    
+  **Token claims**
+
+  ```json
+  {
+    "sub": "claude-tag@clients",
+    "gty": "client-credentials"
+  }
+  ```
+
 - **When** it connects to a server with the default verifier
 - **Then** the connection fails: the verifier maps people, and this is not one
 
 ### ✅ is served as the subject a rule names, once the deployment opts in
+
 Tags: `e2e`, `policy`
 
 - **Given** a server that accepts tokens without an email, and a rule for this agent
-    > A shared agent, such as an assistant in a team chat, holds one credential for everyone it answers. The rule grants it what all of them may read.
-    **The rule**
-    
-    ```json
-    {
-      "match": {
-        "sub": "claude-tag@clients"
-      },
-      "role": "reader"
-    }
-    ```
-    
+
+  > A shared agent, such as an assistant in a team chat, holds one credential for everyone it answers. The rule grants it what all of them may read.
+  > **The rule**
+
+  ```json
+  {
+    "match": {
+      "sub": "claude-tag@clients"
+    },
+    "role": "reader"
+  }
+  ```
+
 - **When** the agent connects
-    **Catalogue**
-    
+  **Catalogue**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "tools": [
-        "get_case",
-        "search_cases"
-      ],
-      "prompts": [
-        "triage"
-      ],
-      "resources": [
-        "cases"
-      ],
-      "resourceTemplates": [
-        "case"
-      ]
-    }
-    ```
-    
+
+  ```json
+  {
+    "tools": ["get_case", "search_cases"],
+    "prompts": ["triage"],
+    "resources": ["cases"],
+    "resourceTemplates": ["case"]
+  }
+  ```
+
     </details>
-    
+
 - **Then** it gets the reader's catalogue, and no more
 
 ### ✅ matches no email or domain rule, which name people
+
 Tags: `e2e`, `security`
 
 - **Given** a policy that grants everyone at acme.com
-    **The rule**
-    
-    ```json
-    {
-      "match": {
-        "domain": "acme.com"
-      },
-      "role": "lead"
-    }
-    ```
-    
+  **The rule**
+
+  ```json
+  {
+    "match": {
+      "domain": "acme.com"
+    },
+    "role": "lead"
+  }
+  ```
+
 - **When** a person from acme.com connects, and then the agent
 - **Then** the person is served and the agent is refused: it has no domain to match
 
 ### ✅ is admitted by a rule with no match, which means every verified caller
+
 Tags: `e2e`, `policy`
 
 - **Given** a catch-all rule, on a server that accepts agents
-    > Every token the issuer mints for this server passes it, agents included.
-    **The rule**
-    
-    ```json
-    {
-      "role": "reader"
-    }
-    ```
-    
+
+  > Every token the issuer mints for this server passes it, agents included.
+  > **The rule**
+
+  ```json
+  {
+    "role": "reader"
+  }
+  ```
+
 - **When** the agent connects
 - **Then** it is served as a reader
 
 ### Building the map this file gates with
 
 ### ✅ reads the same capability set the permission map prices
+
 Tags: `e2e`, `gate`
 
 - **Given** case-tracker with every capability its configuration can register
-    > A catalogue that varies by configuration has to be recorded with the branches on. Record it with close_run switched off and the map is short by exactly the tool most worth pricing.
+  > A catalogue that varies by configuration has to be recorded with the branches on. Record it with close_run switched off and the map is short by exactly the tool most worth pricing.
 - **When** the capabilities are read off the ungated server
 - **Then** they are precisely the labels PERMISSIONS gives a price to
-    > The two vocabularies are written by different code. This is what keeps them one.
+  > The two vocabularies are written by different code. This is what keeps them one.
 
 ## src/journey.story.test.ts
 
 ### ✅ save, switch a tool off, connect, upgrade, refresh: the choice survives
+
 Tags: `journey`, `wrap`
 
 - **Given** a person saves a server's tools and their client entry
@@ -374,6 +343,7 @@ Tags: `journey`, `wrap`
 - **And** the client still sees only what they chose
 
 ### ✅ a rug pull: an approved tool changes its description, and loses its place until reviewed
+
 Tags: `journey`, `security`, `wrap`
 
 - **Given** a person approves search_cases as "Find cases"
@@ -389,40 +359,45 @@ Tags: `journey`, `security`, `wrap`
 ### Connecting Claude through Google
 
 ### ✅ refuses an unpermitted call with a 403 whether or not scopes are configured
+
 Tags: `audit`, `security`
 
 - **Given** a server whose tools declare permissions, and no scope step-up map
 - **When** a reader names the tool it was never shown
 - **Then** it is the same actionable 403 a scope-configured server would give
-    > Non-registration already makes the tool unreachable, but on its own it answers a probe with the SDK’s "unknown tool" and writes no record. The refusal a person has to explain later is worth naming, and worth auditing.
+  > Non-registration already makes the tool unreachable, but on its own it answers a probe with the SDK’s "unknown tool" and writes no record. The refusal a person has to explain later is worth naming, and worth auditing.
 - **And** the denied attempt reaches the decision sink
 
 ### ✅ points an unauthenticated caller at the authorization server
+
 Tags: `discovery`, `oauth`
 
 - **Given** Claude has never seen this server and holds no token
 - **When** it calls a tool
 - **Then** it is refused with the challenge that starts the whole flow
 - **And** the challenge names where to find the resource metadata (RFC 9728)
-    > Without this header Claude has nowhere to begin: it cannot guess the authorization server.
+  > Without this header Claude has nowhere to begin: it cannot guess the authorization server.
 
 ### ✅ publishes metadata naming this exact host
+
 Tags: `discovery`, `oauth`
 
 - **Given** a client following the challenge to the metadata document
 - **When** it fetches the protected resource metadata
 - **Then** the resource is the URL clients actually call
-    > Advertise a different host and a conforming client never attaches its token, so the flow loops forever with a valid token it refuses to use. No error says "wrong host".
+  > Advertise a different host and a conforming client never attaches its token, so the flow loops forever with a valid token it refuses to use. No error says "wrong host".
 
 ### ✅ refuses a token minted for a different resource
+
 Tags: `oauth`, `security`
 
 - **Given** a valid, correctly signed token issued for another service
 - **When** it is presented here
 - **Then** the signature being good is not enough
-    > RFC 8707 audience binding: a token is for one resource, not for any resource.
+  > RFC 8707 audience binding: a token is for one resource, not for any resource.
 
 ### ✅ refuses someone outside the Workspace domain
+
 Tags: `oauth`, `security`
 
 - **Given** a token for a personal Google account rather than the company one
@@ -430,36 +405,40 @@ Tags: `oauth`, `security`
 - **Then** the domain check refuses them
 
 ### ✅ answers a permitted-nowhere person with an actionable 403, not an internal error
+
 Tags: `access`, `security`
 
 - **Given** Leo, who signs in with Google but is not on the access list
 - **When** he calls a tool over HTTP
 - **Then** he gets a refusal that tells him what to do about it
-    > Resolving inside the MCP factory instead makes this a 500: the SDK owns factory failures, so the reason never reaches the caller. Resolve before handing off.
+  > Resolving inside the MCP factory instead makes this a 500: the SDK owns factory failures, so the reason never reaches the caller. Resolve before handing off.
 
 ### ✅ challenges for write when Mcp-Name names a mutating tool
+
 Tags: `oauth`, `scopes`
 
 - **Given** Dana holds only the baseline mcp scope
 - **When** she calls a tool that needs write, named on Mcp-Name
 - **Then** the gate refuses with an actionable insufficient_scope challenge
-    > A tool returning isError cannot set WWW-Authenticate, so the client has nothing to step up to.
+  > A tool returning isError cannot set WWW-Authenticate, so the client has nothing to step up to.
 
 ### Asking a person before a permitted action runs
 
 ### ✅ runs a permitted call only once a named person says yes
+
 Tags: `approval`, `security`
 
 - **Given** an editor who already holds cases:delete
-    > Approval is not the permission check again. Alice is permitted; the question is whether this particular call should happen, and that is a second person’s to answer.
+  > Approval is not the permission check again. Alice is permitted; the question is whether this particular call should happen, and that is a second person’s to answer.
 - **When** she deletes with force, which this tool says needs a person
 - **Then** the approver saw who was asking and what it would touch
 - **And** the action ran
 - **And** the audit trail names the approver, not just the caller
-    > One service account downstream, two people upstream. The success event is the only place both of them appear.
+  > One service account downstream, two people upstream. The success event is the only place both of them appear.
 - **And** every event says what it is, for a log store that holds both kinds
 
 ### ✅ refuses a runtime approval that does not name the approver
+
 Tags: `approval`, `security`
 
 - **Given** an untyped approval adapter that accidentally returns yes without a name
@@ -467,50 +446,56 @@ Tags: `approval`, `security`
 - **Then** the runtime check fails closed even though TypeScript was bypassed
 
 ### ✅ refuses when the person says no, and when nobody answers in time
+
 Tags: `approval`, `security`
 
 - **Given** an approver who declines
 - **When** the call is made
 - **Then** the handler never runs, and the reason reaches the caller
 - **And** silence is a refusal too, so an unanswered request cannot hold a connection open
-    > The deadline is what keeps this a library. Nothing has to survive a restart, because a process that dies mid-question takes the open request with it and the action correctly did not happen.
+  > The deadline is what keeps this a library. Nothing has to survive a restart, because a process that dies mid-question takes the open request with it and the action correctly did not happen.
 - **And** a sink that throws refuses rather than letting the action through
 
 ### ✅ measures the wait for a person, so the log shows what a call really cost
+
 Tags: `approval`, `operations`
 
 - **Given** an approver who takes a moment, as a person does
-    > A duration that stopped at the handler would say a destructive call took a millisecond, when it actually held a connection open while somebody decided.
+  > A duration that stopped at the handler would say a destructive call took a millisecond, when it actually held a connection open while somebody decided.
 - **When** the call is approved
 - **Then** the success event covers the whole wait, not just the handler
 - **And** the events are stamped in the order they happened
 - **And** the attempt is recorded before the answer, so a refusal still has a start
 
 ### ✅ asks nobody for the calls that did not ask for a person
+
 Tags: `approval`
 
 - **Given** the same tool called without force, and a tool that never asks
 - **When** both run
 - **Then** neither interrupted anyone
-    > The predicate reads the arguments, so the cheap path stays as cheap as it was.
+  > The predicate reads the arguments, so the cheap path stays as cheap as it was.
 
 ### ✅ asks for a person before a prompt, which is a tool call somebody else composed
+
 Tags: `approval`, `security`
 
 - **Given** the destructive call reachable through a prompt as well as directly
-    > Gating the tool alone leaves the prompt as a way to reach the same action without a person. A prompt costs what the call it composes costs, approval included.
+  > Gating the tool alone leaves the prompt as a way to reach the same action without a person. A prompt costs what the call it composes costs, approval included.
 - **When** the prompt is fetched
 - **Then** the same person was asked, and the same refusal reached the caller
 
 ### ✅ treats an answer that arrives after the deadline as no answer
+
 Tags: `approval`, `security`
 
 - **Given** an approver who says yes, forty milliseconds too late
-    > Fail closed. A yes that arrives after the caller has been told no would run an action nobody is still watching, and the audit trail would disagree with itself.
+  > Fail closed. A yes that arrives after the caller has been told no would run an action nobody is still watching, and the audit trail would disagree with itself.
 - **When** the call is made
 - **Then** the deadline already answered, and the late yes changes nothing
 
 ### ✅ refuses to boot when a capability asks for a person and none can be reached
+
 Tags: `approval`, `operations`
 
 - **Given** a tool declaring approval, and a server built without a sink
@@ -520,96 +505,105 @@ Tags: `approval`, `operations`
 ### Gating everything a caller can reach
 
 ### ✅ hides the prompt and the resource from someone who may only read
+
 Tags: `access`, `security`
 
 - **Given** a reader, and a prompt that costs the same permission as the write it composes
-    > MCP exposes tools, prompts and resources. Gating tools alone leaves two doors open, and a prompt is a tool call somebody else already wrote.
+  > MCP exposes tools, prompts and resources. Gating tools alone leaves two doors open, and a prompt is a tool call somebody else already wrote.
 - **When** each of them connects
 - **Then** the boot-time check counts all three, keyed so a prompt cannot shadow a tool
 - **And** each of them gets a server, carrying only what their permissions cover
-    > What the reader is refused is proved over HTTP in the example app, where prompts/list comes back without triage_case.
+  > What the reader is refused is proved over HTTP in the example app, where prompts/list comes back without triage_case.
 
 ### Starting up with a policy that does not match the tools
 
 ### ✅ refuses to boot rather than serving a tool nobody can reach
+
 Tags: `operations`, `policy`
 
 - **Given** a policy whose roles have drifted from the registered tools
 - **When** the server is constructed
 - **Then** it throws before serving a request, naming both directions of the drift
-    > The compiler already rejects the permission name; this is the same check for a policy loaded from JSON or YAML, where there was never a literal to check.
+  > The compiler already rejects the permission name; this is the same check for a policy loaded from JSON or YAML, where there was never a literal to check.
 
 ### ✅ still checks the tools when a factory of your own wraps them
+
 Tags: `operations`, `policy`
 
 - **Given** a context richer than the principal, so createServer wraps the built server
 - **When** the wrapper is handed the permissions map the wrapping hid
 - **Then** the unreachable tool still fails the boot
 - **And** omitting it is how the check goes silent
-    > A wrapper is a plain function, so there is no map to read off it. Nothing can tell that apart from a hand-written factory that has no tool list at all.
+  > A wrapper is a plain function, so there is no map to read off it. Nothing can tell that apart from a hand-written factory that has no tool list at all.
 
 ### Configuring against a real authorization server
 
 ### ✅ reads the endpoints off the authorization server instead of a config file
+
 Tags: `oauth`, `operations`
 
 - **Given** an AS that publishes only the OIDC document, as Auth0 and Google do
-    > RFC 8414 puts the well-known segment before the issuer path and OIDC appends it. Trying one path only works for about half of the providers people actually use.
+  > RFC 8414 puts the well-known segment before the issuer path and OIDC appends it. Trying one path only works for about half of the providers people actually use.
 - **When** the application discovers it at boot
 - **Then** the RFC 8414 location is tried first, then the OIDC one
 - **And** the JWKS comes with it, so nothing about the AS is written twice
 - **And** a document claiming a different issuer is refused rather than trusted
-    > Endpoints from somebody else’s server would send your users there to sign in.
+  > Endpoints from somebody else’s server would send your users there to sign in.
 - **And** an AS that publishes nothing fails the boot naming what was tried
 
 ### Putting a policy in front of a server somebody else wrote
 
 ### ✅ asks for a person before a tool somebody else wrote, and refuses to wire it without a sink
+
 Tags: `approval`, `security`
 
 - **Given** their destructive tool, priced by you, with an approver of yours behind it
-    > Their builder knows nothing about approval. The permission map already says what their tools cost; naming one here says which of them wants a second person too.
+  > Their builder knows nothing about approval. The permission map already says what their tools cost; naming one here says which of them wants a second person too.
 - **When** a permitted lead calls it
 - **Then** the person was asked, and their handler never ran
 - **And** naming a tool for approval with no sink fails when it is wired, not at the call
-    > The same boot-time refusal `authz` makes, for capabilities it never defined.
+  > The same boot-time refusal `authz` makes, for capabilities it never defined.
 
 ### ✅ hides the tools a caller may not use, without changing their code
+
 Tags: `access`, `policy`
 
 - **Given** an MCP server from another package, whose tools declare no permissions
-    > The SDK keeps a built server’s tool list private, so nothing can filter what it never saw. Gating the server before it registers needs one hook from its builder.
+  > The SDK keeps a built server’s tool list private, so nothing can filter what it never saw. Gating the server before it registers needs one hook from its builder.
 - **When** a reader connects through the gate
 - **Then** their write tool is absent from tools/list for the reader
 - **And** the lead sees both, from the same unchanged builder
 - **And** their tool calls land in your audit log, which their code never writes
-    > TestRail or Jira sees one service account on every call. This is the only record tying the person to what they did.
+  > TestRail or Jira sees one service account on every call. This is the only record tying the person to what they did.
 - **And** a tool nobody priced fails loudly rather than defaulting either way
 - **And** an SDK handle that cannot be disabled fails closed
 
 ### Reading the body that names the capability
 
 ### ✅ never parses a body for a caller it has not authenticated
+
 Tags: `operations`, `security`
 
 - **Given** per-capability scopes, whose selection needs the capability name from the body
-    > The scope is checked against the token this request already carries, not by the bearer gate itself, so the read can wait until a valid token has proved somebody is entitled to make this process do work.
+  > The scope is checked against the token this request already carries, not by the bearer gate itself, so the read can wait until a valid token has proved somebody is entitled to make this process do work.
 - **When** an unauthenticated caller posts far more than the cap
 - **Then** the bearer gate refuses it without reading a byte of the body
 - **And** the cap still bounds an authenticated caller
 - **And** a body that is not JSON at all is a 415 rather than a parse error
-    > The SDK asks hand-wired compositions to answer 415 themselves.
+  > The SDK asks hand-wired compositions to answer 415 themselves.
 - **And** malformed JSON within the cap is still a parse error
 
 ### ✅ never lets an unvalidated header pick the scope on a request with no body
+
 Tags: `security`
 
 - **Given** a GET, which carries no body for its routing headers to disagree with
 - **When** it arrives claiming a cheap capability
 - **Then** the baseline scope applies and the bearer gate still refuses it
-    > Only a POST can be checked body against headers, so anything else is held to the baseline rather than to what its headers asked for.
+  > Only a POST can be checked body against headers, so anything else is held to the baseline rather than to what its headers asked for.
 
 ### ✅ survives a routed capability when the resolver mode has no principal
+
 Tags: `resolver`
 
 - **Given** a server whose capabilities carry route permissions
@@ -618,224 +612,226 @@ Tags: `resolver`
 - **Then** the request is answered rather than crashing on the missing principal
 
 ### ✅ requires the step-up scope on a resource reached through a URI template
+
 Tags: `resources`, `scopes`
 
 - **Given** a templated resource priced for a scope beyond the baseline
 - **When** a reader holding only the baseline scope reads one instance of it
-    **Challenge**
-    
-    ```text
-    Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
-    ```
-    
+  **Challenge**
+
+  ```text
+  Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
+  ```
+
 - **Then** the step-up is demanded, even though the key is a template and the request a URI
-    > The scope map is keyed by the template as registered; the request carries one concrete URI. An exact-string lookup between the two silently skips the step-up.
+  > The scope map is keyed by the template as registered; the request carries one concrete URI. An exact-string lookup between the two silently skips the step-up.
 
 ## src/openapi.story.test.ts
 
 ### An API you already have, gated per person
 
 ### ✅ hands each caller a document that stops at what they may do
+
 Tags: `openapi`
 
 - **Given** case-tracker 3.2.0, described by the OpenAPI document it already ships
-    > No server is introspected and nothing is generated: the document is the catalogue, and it is already in the repository.
-    **Operations in the document**
-    
-    ```json
-    [
-      "createCase",
-      "deleteCase",
-      "getCase",
-      "listCases",
-      "searchCases"
-    ]
-    ```
-    
+
+  > No server is introspected and nothing is generated: the document is the catalogue, and it is already in the repository.
+  > **Operations in the document**
+
+  ```json
+  ["createCase", "deleteCase", "getCase", "listCases", "searchCases"]
+  ```
+
 - **And** a permission map that puts a price on every operation
-    > An operation missing from this map fails the boot, so a new route cannot arrive unpriced.
-    **Permission map**
-    
-    ```json
-    {
-      "listCases": "cases:read",
-      "searchCases": "cases:read",
-      "getCase": "cases:read",
-      "createCase": "cases:write",
-      "deleteCase": "cases:delete"
-    }
-    ```
-    
+
+  > An operation missing from this map fails the boot, so a new route cannot arrive unpriced.
+  > **Permission map**
+
+  ```json
+  {
+    "listCases": "cases:read",
+    "searchCases": "cases:read",
+    "getCase": "cases:read",
+    "createCase": "cases:write",
+    "deleteCase": "cases:delete"
+  }
+  ```
+
 - **When** Dana the reader and Alice the lead each fetch the document
-    **One document, two readers**
-    
-    | Caller | What the document offers |
-    | --- | --- |
-    | Dana (reader) | GET /cases, GET /cases/search, GET /cases/{id} |
-    | Alice (lead) | GET /cases, POST /cases, GET /cases/search, GET /cases/{id}, DELETE /cases/{id} |
-    
+  **One document, two readers**
+
+  | Caller        | What the document offers                                                        |
+  | ------------- | ------------------------------------------------------------------------------- |
+  | Dana (reader) | GET /cases, GET /cases/search, GET /cases/{id}                                  |
+  | Alice (lead)  | GET /cases, POST /cases, GET /cases/search, GET /cases/{id}, DELETE /cases/{id} |
+
 - **Then** Dana is offered the three reads and nothing else
 - **And** Alice, from the same document, is offered the write and the delete too
 - **And** what the document offers, the API actually serves
-    **GET /cases/C1234**
-    
+  **GET /cases/C1234**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "served": "GET /cases/C1234"
-    }
-    ```
-    
+
+  ```json
+  {
+    "served": "GET /cases/C1234"
+  }
+  ```
+
     </details>
-    
 
 ### ✅ refuses the operation an agent never saw, when it names it anyway
+
 Tags: `openapi`, `security`
 
 - **Given** the same reader, and a client that never fetched the document
-    > A smaller document is a context saving, not a boundary. An agent that guessed the path, or a client written against last month`s spec, never asks.
+  > A smaller document is a context saving, not a boundary. An agent that guessed the path, or a client written against last month`s spec, never asks.
 - **When** she deletes a case anyway
-    **What she got back**
-    
+  **What she got back**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "error": "forbidden",
-      "reason": "policy_denied",
-      "error_description": "dana@acme.com matches no rule in the permission 'cases:delete', so they hold no permissions. Ask an administrator to grant them a role."
-    }
-    ```
-    
+
+  ```json
+  {
+    "error": "forbidden",
+    "reason": "policy_denied",
+    "error_description": "dana@acme.com matches no rule in the permission 'cases:delete', so they hold no permissions. Ask an administrator to grant them a role."
+  }
+  ```
+
     </details>
-    
+
 - **Then** the request is refused, naming the permission she lacks
 
 ### ✅ refuses a route the document does not describe
+
 Tags: `openapi`, `security`
 
 - **Given** an endpoint somebody added to the app and left out of the spec
-    > The failure this prevents is the quiet one: a route nobody described is a route nobody priced, and passing it through would make the undescribed case the unguarded case.
+  > The failure this prevents is the quiet one: a route nobody described is a route nobody priced, and passing it through would make the undescribed case the unguarded case.
 - **When** the lead, who may do everything, calls it
-    **What she got back**
-    
+  **What she got back**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "error": "not_found",
-      "error_description": "POST /cases/C1234/export is not in the document this server gates, so it is refused. Describe it in the OpenAPI document, or serve it outside this wrapper."
-    }
-    ```
-    
+
+  ```json
+  {
+    "error": "not_found",
+    "error_description": "POST /cases/C1234/export is not in the document this server gates, so it is refused. Describe it in the OpenAPI document, or serve it outside this wrapper."
+  }
+  ```
+
     </details>
-    
+
 - **Then** it is refused even for her, and the refusal says what to do about it
 
 ### ✅ will not start when the document describes an operation nobody priced
+
 Tags: `boot`, `openapi`
 
 - **Given** a document that grew an operation, and a map that did not
-    > The everyday drift: somebody adds a route, and the map that prices it is a separate file.
+  > The everyday drift: somebody adds a route, and the map that prices it is a separate file.
 - **When** the server is built
 - **Then** it refuses to boot, naming the operation
 - **And** the map you start from is generated from the document, priced so it cannot be forgotten
-    **toPermissionsModule(recordOperations(spec))**
-    
-    ```ts
-    // Generated from a recorded catalogue. Replace every TODO with a real permission.
-    
-    export const PERMISSIONS = {
-      closeCase: "TODO:unassigned",
-      createCase: "TODO:unassigned",
-      deleteCase: "TODO:unassigned",
-      getCase: "TODO:unassigned",
-      listCases: "TODO:unassigned",
-      searchCases: "TODO:unassigned",
-    } as const;
-    
-    export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
-    
-    ```
-    
+  **toPermissionsModule(recordOperations(spec))**
+
+  ```ts
+  // Generated from a recorded catalogue. Replace every TODO with a real permission.
+
+  export const PERMISSIONS = {
+    closeCase: 'TODO:unassigned',
+    createCase: 'TODO:unassigned',
+    deleteCase: 'TODO:unassigned',
+    getCase: 'TODO:unassigned',
+    listCases: 'TODO:unassigned',
+    searchCases: 'TODO:unassigned',
+  } as const;
+
+  export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+  ```
 
 ### ✅ records who called what, in the same event shape as the MCP side
+
 Tags: `audit`, `openapi`
 
 - **Given** an audit sink, and a downstream API that sees one service account
-    > This event is the only place the person appears. The API behind it was called by the gateway, with the gateway`s credential.
+  > This event is the only place the person appears. The API behind it was called by the gateway, with the gateway`s credential.
 - **When** Alice opens a case
-    **What was recorded**
-    
+  **What was recorded**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    [
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "<call id>",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|alice@acme.com",
-        "email": "alice@acme.com",
-        "kind": "operation",
-        "name": "createCase",
-        "permission": "cases:write",
-        "resource": "/cases",
-        "decision": "allow",
-        "phase": "attempt",
-        "at": "<timestamp>"
-      },
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "<call id>",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|alice@acme.com",
-        "email": "alice@acme.com",
-        "kind": "operation",
-        "name": "createCase",
-        "permission": "cases:write",
-        "resource": "/cases",
-        "decision": "allow",
-        "phase": "success",
-        "at": "<timestamp>",
-        "durationMs": "<ms>"
-      }
-    ]
-    ```
-    
+
+  ```json
+  [
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "<call id>",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|alice@acme.com",
+      "email": "alice@acme.com",
+      "kind": "operation",
+      "name": "createCase",
+      "permission": "cases:write",
+      "resource": "/cases",
+      "decision": "allow",
+      "phase": "attempt",
+      "at": "<timestamp>"
+    },
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "<call id>",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|alice@acme.com",
+      "email": "alice@acme.com",
+      "kind": "operation",
+      "name": "createCase",
+      "permission": "cases:write",
+      "resource": "/cases",
+      "decision": "allow",
+      "phase": "success",
+      "at": "<timestamp>",
+      "durationMs": "<ms>"
+    }
+  ]
+  ```
+
     </details>
-    
+
 - **Then** the trail names her, the operation, and what it cost
 - **And** both events of the call carry one id, which is what joins them later
-    > Correlating an attempt with its outcome by identity and timestamp breaks under exactly the concurrency that makes the question worth asking.
+  > Correlating an attempt with its outcome by identity and timestamp breaks under exactly the concurrency that makes the question worth asking.
 
 ## src/policy.story.test.ts
 
 ### Deciding what a caller may do
 
 ### ✅ grants nothing to someone no rule matches
+
 Tags: `policy`, `security`
 
 - **Given** a policy that opens the company domain and names one editor
 - **Then** a colleague gets the domain role
 - **And** the named editor gets both roles, and the permissions union
 - **And** an outsider gets nothing at all
-    > There is no default setting to get wrong. Matching no rule means no permissions, and a policy that fails open is invisible: it works for everybody, including the people it was written to exclude.
+  > There is no default setting to get wrong. Matching no rule means no permissions, and a policy that fails open is invisible: it works for everybody, including the people it was written to exclude.
 
 ### ✅ lets deny win over a grant that nobody tidied up
+
 Tags: `policy`, `security`
 
 - **Given** a contractor who left, denied by subject but still on the editor rule
 - **When** they connect
 - **Then** deny wins, and it is keyed to the subject rather than the email
-    > The half-finished revocation is the realistic one. Denying by `sub` also survives the email being reassigned to a new joiner.
+  > The half-finished revocation is the realistic one. Denying by `sub` also survives the email being reassigned to a new joiner.
 
 ### ✅ matches an IdP group claim so the list is maintained in one place
+
 Tags: `policy`
 
 - **Given** a policy keyed to a group the identity provider already maintains
@@ -843,34 +839,37 @@ Tags: `policy`
 - **And** somebody in a different group is refused without being named anywhere
 
 ### ✅ matches a namespaced claim whose own name contains dots
+
 Tags: `policy`
 
 - **Given** the namespaced claim an IdP actually emits
-    > Auth0 writes group memberships to a URL-shaped claim. Treating the name as a dotted path splits it at `https://acme` and matches nothing, so the rule looks correct and silently grants no one.
+  > Auth0 writes group memberships to a URL-shaped claim. Treating the name as a dotted path splits it at `https://acme` and matches nothing, so the rule looks correct and silently grants no one.
 - **Then** the literal claim name wins over splitting it on dots
 
 ### ✅ refuses to start on a policy that cannot mean what it says
+
 Tags: `operations`, `policy`
 
 - **Given** a rule naming a role that was renamed or never existed
 - **Then** it throws at construction, naming the rule and the role
 - **And** a repeated permission is tidied rather than fatal
-    > Everything downstream is a set, so a repeat changes nothing. Failing the boot over it punishes a policy assembled from JSON, where a duplicate is somebody else's bug.
+  > Everything downstream is a set, so a repeat changes nothing. Failing the boot over it punishes a policy assembled from JSON, where a duplicate is somebody else's bug.
 - **And** a rule that grants nothing is a mistake rather than a subtle deny
 - **And** runtime-loaded match values are validated before the first request
 
 ### Reconciling the policy against the tools at startup
 
 ### ✅ reports drift in both directions
+
 Tags: `operations`, `policy`
 
 - **Given** a role granting a permission no tool requires
 - **And** a tool requiring a permission no role grants
 - **When** the server boots
 - **Then** the unreachable tool is fatal
-    > A tool no role can reach is dead code that looks live. A gateway cannot run this check — it does not learn the tool list until traffic arrives.
+  > A tool no role can reach is dead code that looks live. A gateway cannot run this check — it does not learn the tool list until traffic arrives.
 - **And** the unused permission is only a warning
-    > Granting a role ahead of the tool that will use it is how a staged rollout works. Failing the boot on it teaches people to add dummy tools to deploy.
+  > Granting a role ahead of the tool that will use it is how a staged rollout works. Failing the boot on it teaches people to add dummy tools to deploy.
 - **And** a policy that matches its tools starts silently
 
 ## src/proxy.story.test.ts
@@ -878,24 +877,27 @@ Tags: `operations`, `policy`
 ### createMcpProxy
 
 ### ✅ returns 401 before the upstream is contacted when there is no bearer
+
 Tags: `proxy`, `security`
 
 - **When** a client connects with no bearer token
-    **What the client got back**
-    
-    ```text
-    Version negotiation failed: the server requires authorization (HTTP 401)
-    ```
-    
+  **What the client got back**
+
+  ```text
+  Version negotiation failed: the server requires authorization (HTTP 401)
+  ```
+
 - **Then** the proxy refuses it and the upstream is never called
 
 ### ✅ returns 403 when the policy grants nothing
+
 Tags: `policy`, `proxy`
 
 - **When** someone whose policy role grants no permissions connects
 - **Then** the proxy refuses before forwarding
 
 ### ✅ filters tools/list to what the reader may reach
+
 Tags: `catalogue`, `proxy`
 
 **Catalogue**
@@ -905,19 +907,10 @@ Tags: `catalogue`, `proxy`
 
 ```json
 {
-  "tools": [
-    "get_case",
-    "search_cases"
-  ],
-  "prompts": [
-    "triage"
-  ],
-  "resources": [
-    "cases"
-  ],
-  "resourceTemplates": [
-    "case"
-  ]
+  "tools": ["get_case", "search_cases"],
+  "prompts": ["triage"],
+  "resources": ["cases"],
+  "resourceTemplates": ["case"]
 }
 ```
 
@@ -926,6 +919,7 @@ Tags: `catalogue`, `proxy`
 - **Then** read tools survive and write tools are hidden
 
 ### ✅ hides a tool whose definition changed since it was recorded, and refuses its calls
+
 Tags: `proxy`, `security`
 
 - **Given** search_cases was priced as "Find cases", and the upstream has since rewritten it
@@ -933,55 +927,61 @@ Tags: `proxy`, `security`
 - **And** a call naming it anyway never reaches the upstream
 
 ### ✅ forwards a permitted tools/call
+
 Tags: `proxy`
 
 - **When** the reader calls a read tool
-    **get_case C1**
-    
-    ```text
-    case C1
-    ```
-    
+  **get_case C1**
+
+  ```text
+  case C1
+  ```
+
 - **Then** the upstream answer comes back through the proxy
 
 ### ✅ refuses a denied tools/call before the upstream runs
+
 Tags: `proxy`, `security`
 
 - **When** the reader names a write tool without listing first
 - **Then** the proxy refuses it and the upstream is never asked for the call
 
 ### ✅ filters prompts and resources the same way as tools
+
 Tags: `catalogue`, `proxy`
 
 - **Then** the reader sees the read catalogue across all four kinds
 
 ### ✅ returns insufficient_scope when the token lacks a required step-up scope
+
 Tags: `proxy`, `scopes`
 
 - **When** the lead calls a write tool with only the baseline scope
-    **What the client got back**
-    
-    ```text
-    {"error":"insufficient_scope","error_description":"Insufficient scope"}
-    ```
-    
+  **What the client got back**
+
+  ```text
+  {"error":"insufficient_scope","error_description":"Insufficient scope"}
+  ```
+
 - **Then** the proxy asks for the missing scope instead of forwarding
 
 ### ✅ refuses anything but a POST, without asking the upstream
+
 Tags: `proxy`, `security`
 
 - **When** a client opens the GET stream older protocol versions used
 - **Then** it is refused, and nothing reached the upstream on the service credential
 
 ### ✅ refuses a request without 2026-07-28 routing headers
-Tags: `proxy`, `security`
 
+Tags: `proxy`, `security`
 
 ### ✅ refuses a method nobody decided how to authorize, without forwarding it
+
 Tags: `proxy`, `security`
 
-
 ### ✅ prices a completion as the prompt it completes
+
 Tags: `proxy`, `security`
 
 - **Given** triage is a prompt only writers may use
@@ -989,16 +989,18 @@ Tags: `proxy`, `security`
 - **Then** the completion handler never runs
 
 ### ✅ prices each resource a subscription names, as a read of it
+
 Tags: `proxy`, `security`
 
-
 ### ✅ refuses a body that repeats a key, which parsers resolve differently
+
 Tags: `proxy`, `security`
 
 - **When** a body names close_run, then get_case, under the same key
 - **Then** it is refused before anything decides which one it meant
 
 ### ✅ checks a definition before the first call, when nothing has been listed
+
 Tags: `proxy`, `security`
 
 - **Given** an upstream that rewrote search_cases while the proxy was down
@@ -1007,10 +1009,11 @@ Tags: `proxy`, `security`
 - **And** an unchanged tool is checked the same way, and then called
 
 ### ✅ marks a filtered listing private, whatever the upstream said about sharing it
+
 Tags: `proxy`, `security`
 
-
 ### ✅ removes the upstream's instructions when they differ from the record
+
 Tags: `proxy`, `security`
 
 - **Given** instructions recorded as "Search before you read a case."
@@ -1018,24 +1021,39 @@ Tags: `proxy`, `security`
 - **Then** the client receives none, and the log says why
 
 ### ✅ filters JSON listing responses from the upstream
+
 Tags: `catalogue`, `proxy`
 
-
 ### ✅ refuses a POST whose routing headers disagree with its body
+
 Tags: `proxy`, `security`
 
 - **Given** a reader who may not write
 - **When** they label a write call as a harmless listing in the Mcp-Method header
-    **What the client got back**
-    
-    ```json
-    {"jsonrpc":"2.0","error":{"code":-32020,"message":"Bad Request: the request headers and body disagree: the body names method tools/call but the Mcp-Method header names tools/list","data":{"mismatch":{"header":"tools/list","body":"the body names method tools/call but the Mcp-Method header names tools/list"}}},"id":1}
-    ```
-    
+  **What the client got back**
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "error": {
+      "code": -32020,
+      "message": "Bad Request: the request headers and body disagree: the body names method tools/call but the Mcp-Method header names tools/list",
+      "data": {
+        "mismatch": {
+          "header": "tools/list",
+          "body": "the body names method tools/call but the Mcp-Method header names tools/list"
+        }
+      }
+    },
+    "id": 1
+  }
+  ```
+
 - **Then** the proxy refuses it rather than trusting the header
 - **And** the upstream never sees the smuggled call
 
 ### ✅ authorises a resources/read by URI, template included
+
 Tags: `proxy`, `resources`
 
 - **When** the reader reads the static resource the catalogue offered her
@@ -1044,18 +1062,20 @@ Tags: `proxy`, `resources`
 - **And** the template matches and the read is allowed
 
 ### ✅ refuses a resources/read that no priced URI covers
+
 Tags: `proxy`, `security`
 
 - **When** the reader names a URI outside every priced resource
-    **What the client got back**
-    
-    ```text
-    Error POSTing to endpoint: {"error":"forbidden","reason":"policy_denied","error_description":"dana@acme.com matches no rule in the capability 'secrets://payroll' is not priced in the permission map, so they hold no permissions. Ask an administrator to grant them a role."}
-    ```
-    
+  **What the client got back**
+
+  ```text
+  Error POSTing to endpoint: {"error":"forbidden","reason":"policy_denied","error_description":"dana@acme.com matches no rule in the capability 'secrets://payroll' is not priced in the permission map, so they hold no permissions. Ask an administrator to grant them a role."}
+  ```
+
 - **Then** the proxy refuses it and the upstream never sees the read
 
 ### ✅ does not put the upstream framing headers on a body it rewrote
+
 Tags: `proxy`, `streaming`
 
 **Framing**
@@ -1076,39 +1096,42 @@ Tags: `proxy`, `streaming`
 - **Then** the stale length and encoding are dropped rather than copied onto the shorter body
 
 ### ✅ does not forward the caller credentials meant for the proxy
+
 Tags: `proxy`, `security`
 
 - **When** a browser-borne request arrives carrying a session cookie
-    **Upstream saw**
-    
+  **Upstream saw**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "cookie": null,
-      "authorization": "Bearer service-token"
-    }
-    ```
-    
+
+  ```json
+  {
+    "cookie": null,
+    "authorization": "Bearer service-token"
+  }
+  ```
+
     </details>
-    
+
 - **Then** the upstream gets the service credential and none of the caller cookies
 
 ### ✅ lets a genuine failure reach the host instead of flattening it to a 500
+
 Tags: `operations`, `proxy`
 
 - **When** a step fails for a reason that is nobody policy decision
-    **What escaped the proxy**
-    
-    ```text
-    TypeError: upstream DNS exploded
-    ```
-    
+  **What escaped the proxy**
+
+  ```text
+  TypeError: upstream DNS exploded
+  ```
+
 - **Then** the original error propagates, with its type and message intact
-    > A refusal is a considered answer and is returned. A bug is not, and belongs to whatever runs this process — swallowing it into a 500 would lose the stack that explains it.
+  > A refusal is a considered answer and is returned. A bug is not, and belongs to whatever runs this process — swallowing it into a 500 would lose the stack that explains it.
 
 ### ✅ holds a completion and a subscription to the scopes of what they reach
+
 Tags: `proxy`, `scopes`, `security`
 
 - **Given** triage and the case resource each need a step-up scope
@@ -1116,23 +1139,25 @@ Tags: `proxy`, `scopes`, `security`
 - **Then** both are challenged for the scope a direct request would need, and nothing is forwarded
 
 ### ✅ refuses arguments outside the approved inputSchema, before the upstream runs
+
 Tags: `proxy`, `security`
 
-
 ### ✅ requires a resource step-up scope, matched by URI against the label it was keyed by
+
 Tags: `proxy`, `scopes`
 
 - **When** a reader with only the baseline scope reads a resource priced for step-up
-    **Challenge**
-    
-    ```text
-    Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
-    ```
-    
+  **Challenge**
+
+  ```text
+  Bearer error="insufficient_scope", error_description="Insufficient scope", scope="mcp cases:sensitive", resource_metadata="https://mcp.acme.com/.well-known/oauth-protected-resource/mcp"
+  ```
+
 - **Then** the proxy asks for the missing scope rather than serving the read
-    > The scope map is keyed by label, and the request carries a URI. Looking one up as the other is a step-up that silently never happens.
+  > The scope map is keyed by label, and the request carries a URI. Looking one up as the other is a step-up that silently never happens.
 
 ### ✅ refuses a URI a privileged template also covers, whatever the map order
+
 Tags: `proxy`, `security`
 
 - **Given** a broad readable template listed before a narrow privileged one
@@ -1140,6 +1165,7 @@ Tags: `proxy`, `security`
 - **Then** the proxy refuses, because it cannot know which one the upstream will route to
 
 ### ✅ filters an SSE listing whatever shape the event framing takes
+
 Tags: `proxy`, `streaming`
 
 **What reached the client**
@@ -1154,34 +1180,37 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","in
 - **Then** the write tool is gone from the stream, not merely from the JSON shape
 
 ### ✅ refuses a listing it cannot read rather than passing it through
+
 Tags: `proxy`, `security`
 
 - **When** the upstream answers a listing in a content type the proxy cannot filter
-    **What reached the client**
-    
-    ```text
-    {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list came back as 'text/plain'."}}
-    ```
-    
+  **What reached the client**
+
+  ```text
+  {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list came back as 'text/plain'."}}
+  ```
+
 - **Then** the catalogue is withheld rather than served unfiltered
-    > Failing open here would hand every caller the full catalogue on a content-type change.
+  > Failing open here would hand every caller the full catalogue on a content-type change.
 
 ### ✅ delivers a filtered event before the upstream stream has finished
+
 Tags: `proxy`, `streaming`
 
 - **When** the upstream sends one event and then holds the connection open
-    **First event through**
-    
-    ```text
-    data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
-    
-    
-    ```
-    
+  **First event through**
+
+  ```text
+  data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","inputSchema":{"properties":{},"type":"object"},"name":"search_cases"}],"cacheScope":"private"}}
+
+
+  ```
+
 - **Then** the filtered event arrives while the stream is still open
 - **And** the write tool never appears in it
 
 ### ✅ filters an SSE listing framed with bare carriage returns and a byte-order mark
+
 Tags: `proxy`, `streaming`
 
 **What reached the client**
@@ -1194,22 +1223,24 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","in
 - **Then** the catalogue is filtered rather than passed through unread
 
 ### ✅ refuses an SSE event that never ends rather than growing to hold it
+
 Tags: `proxy`, `security`
 
 - **When** an upstream sends an event with no terminator, larger than the cap
-    **What reached the client**
-    
-    ```text
-    event: message
-    data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list sent an event over 512 bytes."}}
-    
-    
-    ```
-    
+  **What reached the client**
+
+  ```text
+  event: message
+  data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list sent an event over 512 bytes."}}
+
+
+  ```
+
 - **Then** the proxy stops rather than buffering whatever the upstream sends
-    > Otherwise a broken or hostile upstream decides how much memory this process spends.
+  > Otherwise a broken or hostile upstream decides how much memory this process spends.
 
 ### ✅ filters an SSE listing whose two line endings differ from each other
+
 Tags: `proxy`, `streaming`
 
 **What reached the client**
@@ -1224,6 +1255,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","in
 - **Then** the boundary is recognised and the catalogue filtered, without waiting for EOF
 
 ### ✅ refuses an oversized event whether or not its terminator shares a chunk
+
 Tags: `proxy`, `security`
 
 **What reached the client**
@@ -1236,47 +1268,50 @@ data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: thi
 ```
 
 - **Then** the cap holds regardless of how the transport happened to split it
-    > A limit that depends on chunk boundaries is a limit an upstream can choose to miss.
+  > A limit that depends on chunk boundaries is a limit an upstream can choose to miss.
 
 ### ✅ answers an unfilterable event under the id the client is waiting on
+
 Tags: `proxy`, `streaming`
 
 - **When** the upstream sends an event the proxy cannot read
-    **Error envelope**
-    
+  **Error envelope**
+
     <details>
     <summary>snapshot</summary>
-    
-    ```json
-    {
-      "jsonrpc": "2.0",
-      "id": 1,
-      "error": {
-        "code": -32010,
-        "message": "Bad Gateway: this catalogue could not be filtered — tools/list carried an unreadable event."
-      }
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32010,
+      "message": "Bad Gateway: this catalogue could not be filtered — tools/list carried an unreadable event."
     }
-    ```
-    
+  }
+  ```
+
     </details>
-    
+
 - **Then** the error carries the request id, so the caller stops waiting on it
-    > An error with id null matches no pending request. A client that ignores it leaves the original listing outstanding for as long as the stream stays open.
+  > An error with id null matches no pending request. A client that ignores it leaves the original listing outstanding for as long as the stream stays open.
 
 ### ✅ refuses a JSON catalogue larger than the cap instead of buffering it
+
 Tags: `proxy`, `security`
 
 - **When** the upstream answers a listing with a body far over the cap
-    **What reached the client**
-    
-    ```text
-    {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list was over 512 bytes or not readable as JSON-RPC."}}
-    ```
-    
+  **What reached the client**
+
+  ```text
+  {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: this catalogue could not be filtered — tools/list was over 512 bytes or not readable as JSON-RPC."}}
+  ```
+
 - **Then** the cap applies to what comes back, not only to what goes out
-    > It is advertised as bounding a message in either direction, so it has to.
+  > It is advertised as bounding a message in either direction, so it has to.
 
 ### ✅ measures the event cap in bytes, not in UTF-16 units
+
 Tags: `proxy`, `security`
 
 **What reached the client**
@@ -1289,9 +1324,10 @@ data: {"jsonrpc":"2.0","id":1,"error":{"code":-32010,"message":"Bad Gateway: thi
 ```
 
 - **Then** a cap in bytes is enforced in bytes, whatever alphabet the content is in
-    > Otherwise the advertised limit is three times larger for anyone not writing ASCII.
+  > Otherwise the advertised limit is three times larger for anyone not writing ASCII.
 
 ### ✅ finds an event boundary split across two chunks
+
 Tags: `proxy`, `streaming`
 
 **What reached the client**
@@ -1306,6 +1342,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"description":"Find cases","in
 - **Then** the event is recognised and filtered without waiting for the stream to end
 
 ### ✅ counts bytes correctly when multibyte characters straddle chunks
+
 Tags: `proxy`, `streaming`
 
 - **Then** the byte cap still refuses it, counted over the reassembled event
@@ -1313,19 +1350,25 @@ Tags: `proxy`, `streaming`
 ### createMcpProxy deadlines and audit
 
 ### ✅ stops a forwarded call at the deadline and answers 504
+
 Tags: `operations`, `proxy`
 
 - **Given** an upstream that never answers get_case, and a 50ms deadline
 - **When** the reader calls get_case
-    **What the client receives**
-    
-    ```json
-    {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"The upstream did not answer within 50ms."}}
-    ```
-    
+  **What the client receives**
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": { "code": -32000, "message": "The upstream did not answer within 50ms." }
+  }
+  ```
+
 - **Then** the proxy stops the upstream request and records the call as a failure
 
 ### ✅ stops the upstream request when the client hangs up
+
 Tags: `operations`, `proxy`
 
 - **Given** an upstream that never answers get_case, and no deadline
@@ -1333,85 +1376,88 @@ Tags: `operations`, `proxy`
 - **Then** the proxy cancels the request it made to the upstream
 
 ### ✅ records a forwarded call as an attempt and its outcome, under one callId
+
 Tags: `audit`, `proxy`
 
 - **When** the reader lists the tools, calls get_case and reads a case
-    **onAudit**
-    
-    ```json
-    [
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "bdf2fd11-00f5-4509-8fd1-57f5858f55eb",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|dana@acme.com",
-        "email": "dana@acme.com",
-        "domain": "acme.com",
-        "kind": "tool",
-        "name": "get_case",
-        "permission": "cases:read",
-        "decision": "allow",
-        "phase": "attempt",
-        "at": "2026-11-07T11:02:33.212Z"
-      },
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "bdf2fd11-00f5-4509-8fd1-57f5858f55eb",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|dana@acme.com",
-        "email": "dana@acme.com",
-        "domain": "acme.com",
-        "kind": "tool",
-        "name": "get_case",
-        "permission": "cases:read",
-        "decision": "allow",
-        "phase": "success",
-        "at": "2026-11-07T11:02:33.213Z",
-        "durationMs": 0.9324590000001081
-      },
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "6909ec8c-2e4e-440e-a430-3ad80d76158f",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|dana@acme.com",
-        "email": "dana@acme.com",
-        "domain": "acme.com",
-        "kind": "resource",
-        "name": "case",
-        "permission": "cases:read",
-        "resource": "cases://case/C1",
-        "decision": "allow",
-        "phase": "attempt",
-        "at": "2026-11-07T11:02:33.217Z"
-      },
-      {
-        "type": "mcp_authz.audit.v1",
-        "callId": "6909ec8c-2e4e-440e-a430-3ad80d76158f",
-        "issuer": "https://auth.acme.com",
-        "sub": "auth0|dana@acme.com",
-        "email": "dana@acme.com",
-        "domain": "acme.com",
-        "kind": "resource",
-        "name": "case",
-        "permission": "cases:read",
-        "resource": "cases://case/C1",
-        "decision": "allow",
-        "phase": "success",
-        "at": "2026-11-07T11:02:33.218Z",
-        "durationMs": 0.5774170000004233
-      }
-    ]
-    ```
-    
+  **onAudit**
+
+  ```json
+  [
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "6014acaa-bf6b-427b-921d-6bea5024ecba",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|dana@acme.com",
+      "email": "dana@acme.com",
+      "domain": "acme.com",
+      "kind": "tool",
+      "name": "get_case",
+      "permission": "cases:read",
+      "decision": "allow",
+      "phase": "attempt",
+      "at": "2026-11-07T16:47:45.754Z"
+    },
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "6014acaa-bf6b-427b-921d-6bea5024ecba",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|dana@acme.com",
+      "email": "dana@acme.com",
+      "domain": "acme.com",
+      "kind": "tool",
+      "name": "get_case",
+      "permission": "cases:read",
+      "decision": "allow",
+      "phase": "success",
+      "at": "2026-11-07T16:47:45.756Z",
+      "durationMs": 1.0667089999999462
+    },
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "a34aad3b-64c8-4445-a705-3cae9627b87d",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|dana@acme.com",
+      "email": "dana@acme.com",
+      "domain": "acme.com",
+      "kind": "resource",
+      "name": "case",
+      "permission": "cases:read",
+      "resource": "cases://case/C1",
+      "decision": "allow",
+      "phase": "attempt",
+      "at": "2026-11-07T16:47:45.767Z"
+    },
+    {
+      "type": "mcp_authz.audit.v1",
+      "callId": "a34aad3b-64c8-4445-a705-3cae9627b87d",
+      "issuer": "https://auth.acme.com",
+      "sub": "auth0|dana@acme.com",
+      "email": "dana@acme.com",
+      "domain": "acme.com",
+      "kind": "resource",
+      "name": "case",
+      "permission": "cases:read",
+      "resource": "cases://case/C1",
+      "decision": "allow",
+      "phase": "success",
+      "at": "2026-11-07T16:47:45.767Z",
+      "durationMs": 0.5210829999998623
+    }
+  ]
+  ```
+
 - **Then** each invocation is an attempt and a success; the listing records nothing
 
 ### ✅ records an upstream error status as a failure
+
 Tags: `audit`, `proxy`
 
 - **When** the upstream answers get_case with a 500
 - **Then** the call is recorded as a failure carrying the status
 
 ### ✅ answers 504 when the deadline falls while the answer is still arriving
+
 Tags: `operations`, `proxy`
 
 - **Given** an upstream that sends get_case headers at once, then stalls mid-body
@@ -1419,6 +1465,7 @@ Tags: `operations`, `proxy`
 - **Then** the client gets a 504 carrying its request id, and the call is a failure
 
 ### ✅ records the outcome when the answer has arrived, not when its headers do
+
 Tags: `audit`, `proxy`
 
 - **Given** a resource read whose answer streams through unscreened, and stalls mid-body
@@ -1427,16 +1474,42 @@ Tags: `audit`, `proxy`
 - **And** the call is recorded as a failure, with the deadline as the reason
 
 ### ✅ does not run a call the audit log refused to record
+
 Tags: `audit`, `proxy`, `security`
 
 - **When** the audit sink throws on the attempt
 - **Then** the caller gets a 503 and the upstream never sees the call
+
+### createMcpProxy upstream credential per person
+
+### ✅ forwards each call with the key the bearer function picks for that person
+
+Tags: `proxy`, `upstream`
+
+- **Given** a bearer function that hands writers a write key and everyone else a read key
+- **When** the reader and the lead each call get_case
+  **Credential on each upstream request**
+
+  ```
+  server/discover Bearer read-key
+  server/discover Bearer catalogue-key
+  tools/list Bearer catalogue-key
+  prompts/list Bearer catalogue-key
+  resources/list Bearer catalogue-key
+  resources/templates/list Bearer catalogue-key
+  tools/call Bearer read-key
+  server/discover Bearer write-key
+  tools/call Bearer write-key
+  ```
+
+- **Then** each call reaches the upstream with that person's key; the proxy's own reads use neither
 
 ## src/resource-overlap.story.test.ts
 
 ### Reading a URI that an exact resource and a template both cover
 
 ### ✅ demands the exact resource’s scope too, registered broad first
+
 Tags: `oauth`, `scopes`, `security`
 
 - **Given** Dana holds both permissions but only the broad template’s scope
@@ -1446,6 +1519,7 @@ Tags: `oauth`, `scopes`, `security`
 - **And** with every matching scope she gets the payroll contents
 
 ### ✅ demands the exact resource’s scope too, registered exact first
+
 Tags: `oauth`, `scopes`, `security`
 
 - **Given** Dana holds both permissions but only the broad template’s scope
@@ -1455,6 +1529,7 @@ Tags: `oauth`, `scopes`, `security`
 - **And** with every matching scope she gets the payroll contents
 
 ### ✅ refuses a principal missing the exact resource’s permission, registered broad first
+
 Tags: `access`, `security`
 
 - **Given** a reader granted only the broad template’s permission, holding every scope
@@ -1462,6 +1537,7 @@ Tags: `access`, `security`
 - **Then** the policy refuses naming the unmet admin permission
 
 ### ✅ refuses a principal missing the exact resource’s permission, registered exact first
+
 Tags: `access`, `security`
 
 - **Given** a reader granted only the broad template’s permission, holding every scope
@@ -1469,6 +1545,7 @@ Tags: `access`, `security`
 - **Then** the policy refuses naming the unmet admin permission
 
 ### ✅ serves a URI only the template covers on the template’s scope alone
+
 Tags: `oauth`, `scopes`
 
 - **Given** a reader holding only the template’s permission and scope
@@ -1480,6 +1557,7 @@ Tags: `oauth`, `scopes`
 ### wrap
 
 ### ✅ hides a denied tool from the listing
+
 Tags: `wrap`
 
 - **Given** a stdio server with three tools, wrapped with --deny delete_case
@@ -1487,6 +1565,7 @@ Tags: `wrap`
 - **Then** the denied tool is not there and the others are
 
 ### ✅ refuses a call to a hidden tool without reaching the upstream
+
 Tags: `security`, `wrap`
 
 - **Given** a wrapped server with delete_case denied
@@ -1495,6 +1574,7 @@ Tags: `security`, `wrap`
 - **And** a visible tool still runs, and only it reached the upstream
 
 ### ✅ shows only allowed tools, says what it hid, and names a typo
+
 Tags: `dx`, `wrap`
 
 - **Given** a wrapped server with --allow search_cases,serch_cases
@@ -1503,6 +1583,7 @@ Tags: `dx`, `wrap`
 - **And** stderr says what was hidden, and that one name matched nothing
 
 ### ✅ with recorded definitions, hides an allowed tool the record never saw
+
 Tags: `security`, `wrap`
 
 - **Given** an allow list naming update_case, and a record that predates it
@@ -1510,6 +1591,7 @@ Tags: `security`, `wrap`
 - **Then** only the tool whose definition was approved is shown
 
 ### ✅ checks a definition before a call made without listing first
+
 Tags: `security`, `wrap`
 
 - **Given** search_cases approved as something other than what the server now says
@@ -1517,6 +1599,7 @@ Tags: `security`, `wrap`
 - **Then** wrap lists the server itself, refuses the call, and the server never runs it
 
 ### ✅ checks a tool on the second page of a modern server, keeping the protocol fields
+
 Tags: `security`, `wrap`
 
 - **Given** a server that lists update_case on page two and wants _meta on every request
@@ -1524,24 +1607,28 @@ Tags: `security`, `wrap`
 - **Then** wrap reads both pages, finds it unchanged, and the call runs
 
 ### ✅ answers a call whose recorded schema cannot be checked, and keeps running
+
 Tags: `security`, `wrap`
 
 - **When** the client calls the tool, then pings
 - **Then** the call is refused with a reason, and wrap is still there to answer
 
 ### ✅ refuses a request whose id it could not match to the answer
+
 Tags: `security`, `wrap`
 
 - **When** a listing and a call carry an id past 2^53
 - **Then** both are refused, with the id echoed exactly, and neither reaches the server
 
 ### ✅ exits non-zero, saying why, when the upstream cannot start
+
 Tags: `dx`, `wrap`
 
 - **Given** a wrap whose upstream command does not exist
 - **Then** it exits 1 rather than hanging, and names the command
 
 ### ✅ exits once the client goes away, with the upstream exit code
+
 Tags: `wrap`
 
 - **Given** a connected client
@@ -1551,6 +1638,7 @@ Tags: `wrap`
 ### wrap, at the edges of the protocol
 
 ### ✅ reads a message the way the server does: one line per newline, whatever the text holds
+
 Tags: `security`, `wrap`
 
 - **Given** a wrapped server with delete_case denied
@@ -1558,6 +1646,7 @@ Tags: `security`, `wrap`
 - **Then** the call reaches the server whole, and the listing still comes back filtered
 
 ### ✅ refuses a batch rather than forwarding calls it did not check
+
 Tags: `security`, `wrap`
 
 - **Given** a wrapped server with delete_case denied
@@ -1565,6 +1654,7 @@ Tags: `security`, `wrap`
 - **Then** wrap refuses the batch, and nothing reaches the server
 
 ### ✅ refuses a line it cannot parse rather than forwarding it unchecked
+
 Tags: `security`, `wrap`
 
 - **Given** a wrapped server with delete_case denied
@@ -1572,6 +1662,7 @@ Tags: `security`, `wrap`
 - **Then** wrap answers with a parse error, and nothing reaches the server
 
 ### ✅ refuses a message with a duplicate key, so the two sides cannot read different calls
+
 Tags: `security`, `wrap`
 
 - **Given** a wrapped server with delete_case denied
@@ -1579,6 +1670,7 @@ Tags: `security`, `wrap`
 - **Then** wrap answers that request with an error, and nothing reaches the server
 
 ### ✅ forwards an allowed call byte for byte, so large numbers keep every digit
+
 Tags: `wrap`
 
 - **Given** a wrapped server
@@ -1586,6 +1678,7 @@ Tags: `wrap`
 - **Then** the server receives exactly what was sent
 
 ### ✅ filters a listing even when the server reuses its id for a request of its own
+
 Tags: `security`, `wrap`
 
 - **Given** a server that sends roots/list with the same id as the pending tools/list
@@ -1593,6 +1686,7 @@ Tags: `security`, `wrap`
 - **Then** the server's request passes through, and the listing is still filtered
 
 ### ✅ stops a server that ignores the end of its input, rather than hanging
+
 Tags: `wrap`
 
 - **Given** a server that ignores both EOF and SIGTERM
@@ -1600,6 +1694,7 @@ Tags: `wrap`
 - **Then** wrap escalates to SIGKILL and exits
 
 ### ✅ stops the server when wrap itself is told to stop
+
 Tags: `wrap`
 
 - **Given** a running server, and a client that has not disconnected
@@ -1607,6 +1702,7 @@ Tags: `wrap`
 - **Then** the server does not outlive it
 
 ### ✅ stops the real server, not just the launcher in front of it
+
 Tags: `security`, `wrap`
 
 - **Given** a launcher, like npx, that started a server which ignores SIGTERM
@@ -1614,6 +1710,7 @@ Tags: `security`, `wrap`
 - **Then** by the time wrap exits, the server is gone too
 
 ### ✅ finishes stopping the server when the client has already closed its end
+
 Tags: `wrap`
 
 - **Given** a client whose end of the pipe is closed, as on disconnect
@@ -1621,6 +1718,7 @@ Tags: `wrap`
 - **Then** wrap skips the write and still stops the server
 
 ### ✅ reaps the server when its launcher exits before the client disconnects
+
 Tags: `security`, `wrap`
 
 - **Given** a launcher that starts a persistent server and immediately exits 23
@@ -1628,6 +1726,7 @@ Tags: `security`, `wrap`
 - **Then** the descendant is gone and the launcher exit code is preserved
 
 ### ✅ drops messages that arrive while it is shutting down
+
 Tags: `wrap`
 
 - **Given** a wrap that has started to stop

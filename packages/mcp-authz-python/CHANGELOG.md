@@ -15,6 +15,10 @@ The proxy, new:
   get and resource read as `mcp_authz.audit.v1` events: an `attempt`, then
   `success` or `failure` under one `call_id`. A refused `attempt` write stops
   the call with a `503`.
+- **`upstream_bearer` per person.** A callable that takes an argument receives
+  the principal the call is forwarded for, and `None` for the proxy's own
+  catalogue reads, so readers can get a read-only upstream key. A callable
+  with no parameters works as before.
 
 The proxy, breaking:
 

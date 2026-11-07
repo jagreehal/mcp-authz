@@ -660,7 +660,7 @@ export default createMcpProxy({
   resourceUris: RESOURCE_URIS, // same module; a read names a URI, not a label
   upstream: {
     url: process.env.UPSTREAM_URL!,
-    bearer: process.env.UPSTREAM_TOKEN!,
+    bearer: process.env.UPSTREAM_TOKEN!, // or (who) => a key for that person's role
     timeoutMs: 30_000, // 504 past it, answer included
   },
   onAudit: (event) => auditLog.write(event), // attempt, then success | failure

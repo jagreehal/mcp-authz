@@ -16,6 +16,7 @@ from mcp.server.auth.provider import AccessToken
 
 from mcp_authz import AuditEvent, AuthorizationDecisionEvent, define_policy
 from mcp_authz import proxy as proxy_module
+from mcp_authz.policy import Principal
 from mcp_authz.proxy import McpProxy
 
 RESOURCE = "https://mcp.acme.com/mcp"
@@ -1342,3 +1343,30 @@ class TestDeadlinesAndAudit:
 
         assert response.status_code == 503
         assert upstream.requests == []
+
+
+class TestUpstreamCredentialPerPerson:
+    async def test_forwards_each_call_with_the_key_the_bearer_callable_picks(self) -> None:
+        def key(who: Principal | None) -> str:
+            if who is None:
+                return "catalogue-key"
+            return "write-key" if who.can("cases:write") else "read-key"
+
+        upstream = _Upstream()
+        proxy = _proxy(upstream, upstream_bearer=key)
+
+        for email in ("dana@acme.com", "alice@acme.com"):
+            assert (await _rpc(proxy, "tools/call", {"name": "get_case"}, token=email)).status_code == 200
+
+        assert [request.headers["authorization"] for request in upstream.requests] == [
+            "Bearer read-key",
+            "Bearer write-key",
+        ]
+        assert {request.headers["authorization"] for request in upstream.own} == {"Bearer catalogue-key"}
+
+    async def test_still_calls_a_bearer_callable_that_takes_no_argument(self) -> None:
+        upstream = _Upstream()
+        proxy = _proxy(upstream, upstream_bearer=lambda: "service-credential")
+
+        assert (await _rpc(proxy, "tools/call", {"name": "get_case"})).status_code == 200
+        assert upstream.requests[0].headers["authorization"] == "Bearer service-credential"
