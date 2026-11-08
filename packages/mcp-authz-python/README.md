@@ -70,9 +70,36 @@ makes the same decisions on the TypeScript SDK.
 
 ```bash
 pip install mcp-authz
+pip install 'mcp-authz[otel]'   # adds autotel and the OpenTelemetry SDK
 ```
 
 Requires Python 3.10 or newer. CI covers 3.10, 3.12 and 3.13.
+
+### OpenTelemetry
+
+```python
+import os
+
+from autotel import init
+from mcp_authz.otel import create_otel_authz_sinks
+
+init(service="cases-mcp", instrumentation=["mcp"])
+sinks = create_otel_authz_sinks(hash_key=os.environ["AUDIT_HASH_KEY"])
+
+AuthorizedMCPServer(
+    "cases",
+    ...,
+    emitter="cases-prod",
+    on_audit=sinks["on_audit"],
+    on_decision=sinks["on_decision"],
+)
+```
+
+The sinks write `mcp_authz.audit.*` and `mcp_authz.decision.*` attributes onto
+the active span. With `hash_key`, the subject, email and approver land as
+HMAC-SHA-256 digests that match the TypeScript package's; without it, the sinks
+leave them off. autotel creates the MCP tool spans. Set `OTEL_EXPORTER_OTLP_ENDPOINT`
+or pass `init(endpoint=...)` to export them.
 
 ## Quick start
 

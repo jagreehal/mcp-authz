@@ -33,6 +33,8 @@ dependencies = [
     "jsonschema>=4.20.0,<5",
     # Its registry is how `$ref` is kept from fetching anything.
     "referencing>=0.28",
+    # `mcp_authz.otel` writes events onto the active span.
+    "opentelemetry-api>=1.20,<2",
 ]
 
 [project.urls]
@@ -41,10 +43,15 @@ Repository = "https://github.com/jagreehal/mcp-authz.git"
 Issues = "https://github.com/jagreehal/mcp-authz/issues"
 
 [project.optional-dependencies]
+otel = [
+    "autotel>=0.8",
+    "opentelemetry-sdk>=1.20,<2",
+]
 dev = [
     "build>=1.3",
     "httpx>=0.28",
     "mypy>=1.17",
+    "opentelemetry-sdk>=1.20,<2",
     "pytest>=8.4",
     "pytest-asyncio>=1.1",
     "pytest-cov>=6.0",

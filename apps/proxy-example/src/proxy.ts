@@ -1,4 +1,5 @@
 import { createMcpProxy } from 'mcp-authz/proxy';
+import { createOtelAuthzSinks, createTracedFetch } from 'mcp-authz/otel';
 import { DEFINITIONS, PERMISSIONS, RESOURCE_URIS } from './permissions';
 import { policy } from './policy';
 
@@ -9,6 +10,7 @@ function required(env: Record<string, string | undefined>, name: string): string
 }
 
 export function proxyFromEnv(env: Record<string, string | undefined> = process.env) {
+  const { onAudit, onDecision } = createOtelAuthzSinks({ hashKey: env.AUDIT_HASH_KEY });
   const resourceServerUrl = new URL(required(env, 'MCP_PUBLIC_URL'));
   const issuer = required(env, 'OAUTH_ISSUER');
 
@@ -27,9 +29,13 @@ export function proxyFromEnv(env: Record<string, string | undefined> = process.e
     permissions: PERMISSIONS,
     definitions: DEFINITIONS,
     resourceUris: RESOURCE_URIS,
+    emitter: 'mcp-authz-proxy-example',
+    onAudit,
+    onDecision,
     upstream: {
       url: required(env, 'UPSTREAM_URL'),
       bearer: required(env, 'UPSTREAM_TOKEN'),
+      fetch: createTracedFetch(),
     },
   });
 }

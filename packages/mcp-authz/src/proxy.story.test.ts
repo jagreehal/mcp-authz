@@ -1618,7 +1618,14 @@ describe('createMcpProxy deadlines and audit', () => {
     await client.callTool({ name: 'get_case', arguments: { id: 'C1' } });
     await client.readResource({ uri: 'cases://case/C1' });
     await client.close();
-    story.code({ label: 'onAudit', content: JSON.stringify(events, null, 2), lang: 'json' });
+    // callId, at and durationMs differ on every run; fixed values keep docs/stories.md stable.
+    const stable = events.map((event) => ({
+      ...event,
+      callId: '<call id>',
+      at: '<timestamp>',
+      ...('durationMs' in event && { durationMs: '<ms>' }),
+    }));
+    story.code({ label: 'onAudit', content: JSON.stringify(stable, null, 2), lang: 'json' });
 
     story.then('each invocation is an attempt and a success; the listing records nothing');
     expect(events.map(({ kind, name, phase }) => `${kind} ${name} ${phase}`)).toEqual([

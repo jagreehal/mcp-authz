@@ -6,9 +6,14 @@ minimumReleaseAgeExclude:
   - executable-stories-vitest
   - executable-stories-formatters
   - executable-stories-react
+  - autotel
+  - autotel-cloudflare
+  - autotel-edge
+  - autotel-mcp-instrumentation
 
 allowBuilds:
   esbuild: true
+  protobufjs: false
   workerd: true
 
 overrides:

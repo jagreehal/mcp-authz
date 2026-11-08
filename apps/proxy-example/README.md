@@ -49,8 +49,10 @@ approve a change.
 ```bash
 pnpm --filter mcp-authz-proxy-example build
 wrangler secret put UPSTREAM_TOKEN
+wrangler secret put AUDIT_HASH_KEY
 pnpm --filter mcp-authz-proxy-example deploy
 ```
 
 Set `[vars]` in `wrangler.toml` for public URLs and OAuth metadata. Keep
-`UPSTREAM_TOKEN` as a secret.
+`UPSTREAM_TOKEN` and `AUDIT_HASH_KEY` as secrets. `AUDIT_HASH_KEY` keys the
+digests of user identifiers on spans; without it, spans carry no user identity.

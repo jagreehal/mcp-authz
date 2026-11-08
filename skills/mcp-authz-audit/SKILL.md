@@ -124,3 +124,4 @@ Source: conformance/v1/audit/events.json
 
 See also: mcp-authz-authz/SKILL.md — declaring the capability an event describes
 See also: mcp-authz-openapi/SKILL.md — the same events over an HTTP API
+See also: mcp-authz-otel/SKILL.md — the same events on OpenTelemetry spans

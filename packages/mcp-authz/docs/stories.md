@@ -1386,7 +1386,7 @@ Tags: `audit`, `proxy`
   [
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "6014acaa-bf6b-427b-921d-6bea5024ecba",
+      "callId": "<call id>",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|dana@acme.com",
       "email": "dana@acme.com",
@@ -1396,11 +1396,11 @@ Tags: `audit`, `proxy`
       "permission": "cases:read",
       "decision": "allow",
       "phase": "attempt",
-      "at": "2026-11-07T16:47:45.754Z"
+      "at": "<timestamp>"
     },
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "6014acaa-bf6b-427b-921d-6bea5024ecba",
+      "callId": "<call id>",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|dana@acme.com",
       "email": "dana@acme.com",
@@ -1410,12 +1410,12 @@ Tags: `audit`, `proxy`
       "permission": "cases:read",
       "decision": "allow",
       "phase": "success",
-      "at": "2026-11-07T16:47:45.756Z",
-      "durationMs": 1.0667089999999462
+      "at": "<timestamp>",
+      "durationMs": "<ms>"
     },
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "a34aad3b-64c8-4445-a705-3cae9627b87d",
+      "callId": "<call id>",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|dana@acme.com",
       "email": "dana@acme.com",
@@ -1426,11 +1426,11 @@ Tags: `audit`, `proxy`
       "resource": "cases://case/C1",
       "decision": "allow",
       "phase": "attempt",
-      "at": "2026-11-07T16:47:45.767Z"
+      "at": "<timestamp>"
     },
     {
       "type": "mcp_authz.audit.v1",
-      "callId": "a34aad3b-64c8-4445-a705-3cae9627b87d",
+      "callId": "<call id>",
       "issuer": "https://auth.acme.com",
       "sub": "auth0|dana@acme.com",
       "email": "dana@acme.com",
@@ -1441,8 +1441,8 @@ Tags: `audit`, `proxy`
       "resource": "cases://case/C1",
       "decision": "allow",
       "phase": "success",
-      "at": "2026-11-07T16:47:45.767Z",
-      "durationMs": 0.5210829999998623
+      "at": "<timestamp>",
+      "durationMs": "<ms>"
     }
   ]
   ```
