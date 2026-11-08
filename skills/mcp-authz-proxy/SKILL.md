@@ -164,6 +164,11 @@ upstream. Python: `upstream_timeout` (seconds), `on_audit`,
 
 ### What reaches the upstream
 
+`upstream.bearer` may be a function of the person (`(who) => key`), so readers
+get a read-only upstream key and the upstream enforces the split as well. It is
+called with no one for the proxy's own catalogue reads. Python: a one-argument
+`upstream_bearer` callable, given `None` for those reads.
+
 The caller's `Authorization` is replaced with the service credential, and their
 `Cookie` is dropped along with the hop-by-hop headers — including the ones the
 `Connection` header names. `/health` reports counts, never the upstream address.

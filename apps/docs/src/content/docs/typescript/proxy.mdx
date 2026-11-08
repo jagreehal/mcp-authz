@@ -101,7 +101,7 @@ The handler is a `fetch` function. Bind it with
 | `permissions`                | Required flat map — same labels as `gate()` and `recordCapabilities`   |
 | `definitions`                | Required — the recorded `DEFINITIONS`, held to on listings and calls   |
 | `resourceUris`               | Each `resource:` label to the URI or template it answers on            |
-| `upstream`                   | Upstream base URL, service bearer and optional `timeoutMs`             |
+| `upstream`                   | Upstream base URL, service bearer (or one per person) and `timeoutMs`  |
 | `onAudit` / `onAuditError`   | `mcp_authz.audit.v1` events for each forwarded invocation              |
 | `onDecision`                 | `mcp_authz.decision.v1` events for each allow and deny                 |
 | `capabilityScopes`           | Optional per-capability OAuth step-up, same as embed mode              |
@@ -296,6 +296,20 @@ returns large catalogues. A `tools/call` answer is capped at the larger of this
 and 16 MiB.
 
 </Aside>
+
+## A key per person
+
+When `upstream.bearer` is a function, it receives the person the call is
+forwarded for, so the upstream can enforce the same split the policy does. Hand
+readers a read-only key and the upstream refuses their writes too. The proxy's
+own catalogue reads call it with no one, so return a key that can list.
+
+```ts
+upstream: {
+  url,
+  bearer: (who) => (who?.can('cases:write') ? process.env.WRITE_KEY! : process.env.READ_KEY!),
+},
+```
 
 ## Deadlines and cancellation
 

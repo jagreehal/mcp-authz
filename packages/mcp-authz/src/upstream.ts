@@ -1,7 +1,14 @@
-export type UpstreamConfig = {
+import type { Principal } from './policy';
+
+export type UpstreamConfig<P extends string = string> = {
   /** Base MCP endpoint the proxy forwards to. */
   url: string | URL;
-  bearer: string | (() => string | Promise<string>);
+  /**
+   * The upstream credential. A function receives the person the call is
+   * forwarded for, so the policy can pick a narrower key per role, and no one
+   * for the proxy's own catalogue reads.
+   */
+  bearer: string | ((principal?: Principal<P>) => string | Promise<string>);
   fetch?: typeof fetch;
   /**
    * The most one forwarded request may take, answer included, in milliseconds.
@@ -51,13 +58,14 @@ const DROPPED_ON_FORWARD = new Set([
   'upgrade',
 ]);
 
-export async function forwardToUpstream(
+export async function forwardToUpstream<P extends string>(
   request: Request,
-  config: UpstreamConfig,
+  config: UpstreamConfig<P>,
   deadline?: AbortSignal,
+  principal?: Principal<P>,
 ): Promise<Response> {
   const fetchFn = config.fetch ?? fetch;
-  const bearer = typeof config.bearer === 'function' ? await config.bearer() : config.bearer;
+  const bearer = typeof config.bearer === 'function' ? await config.bearer(principal) : config.bearer;
   const target = new URL(config.url);
 
   const dropped = new Set(DROPPED_ON_FORWARD);

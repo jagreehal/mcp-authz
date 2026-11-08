@@ -21,7 +21,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 from mcp import UriTemplate
@@ -130,7 +130,10 @@ EVENT_END = re.compile(_LINE_END + _LINE_END)
 #: by at most three characters. The scan steps back that far and no more.
 _OVERLAP = 3
 
-Bearer = str | Callable[[], str | Awaitable[str]]
+#: The upstream credential. A callable that takes an argument receives the
+#: person the call is forwarded for, so the policy can pick a narrower key per
+#: role, and ``None`` for the proxy's own catalogue reads.
+Bearer = str | Callable[[], str | Awaitable[str]] | Callable[[Principal | None], str | Awaitable[str]]
 
 
 class _ResourceEntry:
@@ -761,7 +764,7 @@ class McpProxy:
         """One request of the proxy's own, or ``None`` when no usable result came back."""
 
         headers = {
-            "authorization": f"Bearer {await self._bearer()}",
+            "authorization": f"Bearer {await self._bearer(None)}",
             "content-type": "application/json",
             "accept": "application/json, text/event-stream",
             "mcp-protocol-version": PROTOCOL_VERSION,
@@ -788,8 +791,14 @@ class McpProxy:
         finally:
             await response.aclose()
 
-    async def _bearer(self) -> str:
-        bearer = self.upstream_bearer() if callable(self.upstream_bearer) else self.upstream_bearer
+    async def _bearer(self, principal: Principal | None) -> str:
+        source = self.upstream_bearer
+        if isinstance(source, str):
+            return source
+        if _takes_an_argument(source):
+            bearer = cast(Callable[[Principal | None], str | Awaitable[str]], source)(principal)
+        else:
+            bearer = cast(Callable[[], str | Awaitable[str]], source)()
         return bearer if isinstance(bearer, str) else await bearer
 
     def _client(self) -> _Client:
@@ -800,7 +809,7 @@ class McpProxy:
     ) -> None:
         """Swap the caller's credential for the service one, forward, then filter."""
 
-        bearer = await self._bearer()
+        bearer = await self._bearer(principal)
 
         dropped = set(DROPPED_ON_FORWARD)
         # RFC 9110 section 7.6.1: `Connection` names further fields that belong
@@ -1046,6 +1055,13 @@ def _filter_message(
         return None
     rewritten = rewrite(result)
     return payload if rewritten is result else {**payload, "result": rewritten}
+
+
+def _takes_an_argument(function: Callable[..., object]) -> bool:
+    try:
+        return bool(inspect.signature(function).parameters)
+    except (TypeError, ValueError):
+        return False
 
 
 def _visible(permission: str | None, principal: Principal) -> bool:

@@ -318,6 +318,55 @@ describe('audience checks against stubbed providers', () => {
     expect(new URLSearchParams(sent[1]!.body).get('client_secret')).toBe('s:cret');
   });
 
+  it("uses the provider's expiry and refuses an expired token", async () => {
+    const at = (exp: number) =>
+      stub((url) =>
+        url.includes('tokeninfo')
+          ? Response.json({ aud: 'mcp-client', exp: String(exp) })
+          : Response.json({ sub: '1', email: 'dana@foo.com', email_verified: true }),
+      );
+    const provider = google({ clientId: 'mcp-client' });
+    const soon = Math.floor(Date.now() / 1000) + 120;
+    expect((await verify(provider, at(soon))).expiresAt).toBe(soon);
+    await expect(verify(provider, at(soon - 600))).rejects.toThrow('expired');
+  });
+
+  it('asks the provider once per token until the cache entry or the token lapses', async () => {
+    let clock = 1_000_000_000_000;
+    let lookups = 0;
+    const exp = clock / 1000 + 90;
+    const fetch = (async (url: string | URL) => {
+      if (String(url).endsWith('/introspect')) {
+        lookups += 1;
+        return Response.json({ active: true, token_type: 'Bearer', aud: [PROXY.href], exp });
+      }
+      return Response.json({ sub: '1', email: 'dana@foo.com', email_verified: true });
+    }) as typeof globalThis.fetch;
+    const provider = okta({
+      url: 'https://acme.okta.com',
+      clientId: 'c',
+      clientSecret: 's',
+      resourceServerUrl: PROXY,
+    });
+    const { tokenVerifier } = providerLogin(
+      provider,
+      { resourceServerUrl: PROXY },
+      { fetch, now: () => clock },
+    );
+
+    await tokenVerifier.verifyAccessToken('t');
+    await tokenVerifier.verifyAccessToken('t');
+    expect(lookups).toBe(1);
+
+    clock += 61_000; // past the one-minute cache
+    await tokenVerifier.verifyAccessToken('t');
+    expect(lookups).toBe(2);
+
+    clock += 30_000; // past the token's own expiry, inside a fresh cache minute
+    await expect(tokenVerifier.verifyAccessToken('t')).rejects.toThrow('expired');
+    expect(lookups).toBe(3);
+  });
+
   it('will not stand up a provider with no audience check unless told to', () => {
     expect(() =>
       providerLogin(clerk({ url: 'https://clerk.example.com' }), { resourceServerUrl: PROXY }),

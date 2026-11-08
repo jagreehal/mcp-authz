@@ -35,6 +35,14 @@ app = McpProxy(
 An ASGI app: run it under uvicorn, or mount it beside whatever already serves
 your other routes.
 
+A callable `upstream_bearer` that takes an argument receives the person the
+call is forwarded for, and `None` for the proxy's own catalogue reads, so you
+can hand readers a read-only key:
+
+```python
+upstream_bearer=lambda who: WRITE_KEY if who and who.can("cases:write") else READ_KEY
+```
+
 ## Deadlines, cancellation and audit
 
 `upstream_timeout` caps how long one forwarded request may take, answer
