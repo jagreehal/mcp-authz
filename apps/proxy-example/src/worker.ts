@@ -1,3 +1,4 @@
+import { wrapModule } from 'autotel-cloudflare';
 import { proxyFromEnv } from './proxy';
 
 /**
@@ -10,9 +11,15 @@ import { proxyFromEnv } from './proxy';
  */
 let proxy: ((request: Request) => Promise<Response>) | undefined;
 
-export default {
-  fetch(request: Request, env: Record<string, string | undefined>): Promise<Response> {
-    proxy ??= proxyFromEnv(env);
-    return proxy(request);
+export default wrapModule(
+  {
+    service: { name: 'mcp-authz-proxy-example' },
+    nativeTracing: 'auto',
   },
-};
+  {
+    fetch(request: Request, env: Record<string, string | undefined>): Promise<Response> {
+      proxy ??= proxyFromEnv(env);
+      return proxy(request);
+    },
+  },
+);

@@ -454,6 +454,46 @@ retention, its own authentication and a tenancy model, competing with the tool
 your security team already pays for. The events are JSON with a stable shape —
 send them there.
 
+### OpenTelemetry (`mcp-authz/otel`)
+
+`mcp-authz/otel` writes audit and decision events onto the active span. It
+depends on `@opentelemetry/api` alone, so the same sinks run on Node and on
+Workers. You initialise the SDK yourself, with
+[autotel](https://www.npmjs.com/package/autotel) or any OpenTelemetry setup.
+
+```ts
+import { init } from 'autotel';
+import { instrumentMcpServer } from 'autotel-mcp-instrumentation/server';
+import { createOtelAuthzSinks, createTracedFetch } from 'mcp-authz/otel';
+
+init({ service: 'cases-mcp', endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT });
+const { onAudit, onDecision } = createOtelAuthzSinks({ hashKey: process.env.AUDIT_HASH_KEY });
+
+const createServer = server(definitions, { name: 'cases', version: '1.0.0', onAudit });
+createMcpFetch({
+  // …
+  onDecision,
+  createServer: (ctx) => instrumentMcpServer(createServer(ctx), { networkTransport: 'tcp' }),
+});
+
+createMcpProxy({
+  // …
+  onAudit,
+  onDecision,
+  upstream: { url, bearer, fetch: createTracedFetch() },
+});
+```
+
+Spans carry `mcp_authz.audit.*`, `mcp_authz.decision.*` and `security.*`
+attributes. With `hashKey` set, subjects, emails and approvers appear as
+HMAC-SHA-256 digests, which only someone holding the key can match to a person.
+The Python package produces the same digests. Without a key, the sinks leave
+those identifiers off the span. WebCrypto computes the digests, so this works on
+Workers without `nodejs_compat`. Each sink marks its span for autotel tail
+sampling to keep; pass `{ forceKeep: false }` to opt out. `createTracedFetch`
+forwards the W3C trace context to the upstream. On Workers, wrap the module with
+`wrapModule` from `autotel-cloudflare`.
+
 ### Human approval
 
 Some actions want a second person even when the caller is permitted. Declare it

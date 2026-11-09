@@ -1,4 +1,5 @@
 import { createMcpFetch } from 'mcp-authz';
+import { createOtelDecisionSink } from 'mcp-authz/otel';
 import { policy } from './policy';
 import { buildExampleServer } from './server';
 
@@ -44,6 +45,8 @@ export function mcpFromEnv(env: NodeJS.ProcessEnv = process.env) {
     requiredScopes: ['mcp'],
     toolScopes: TOOL_SCOPES,
     policy,
+    emitter: 'mcp-authz-node-example',
+    onDecision: createOtelDecisionSink({ hashKey: env.AUDIT_HASH_KEY }),
     createServer: buildExampleServer,
   });
 }

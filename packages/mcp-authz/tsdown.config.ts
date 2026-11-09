@@ -11,6 +11,7 @@ export default defineConfig({
     testing: 'src/testing.ts',
     proxy: 'src/proxy.ts',
     openapi: 'src/openapi.ts',
+    otel: 'src/otel.ts',
   },
   format: ['esm'],
   dts: true,

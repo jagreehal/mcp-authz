@@ -9,6 +9,7 @@ An OAuth 2.1 **resource server** plus an access policy, as a library you import 
 | Package                                                 | Registry | What it is                                                    |
 | ------------------------------------------------------- | -------- | ------------------------------------------------------------- |
 | [`mcp-authz`](packages/mcp-authz)                       | npm      | TypeScript library: JWKS, policy, permission-gated tools      |
+| [`mcp-authz/otel`](packages/mcp-authz)                  | npm      | OpenTelemetry sinks for audit and decision events             |
 | [`mcp-authz`](packages/mcp-authz-python)                | PyPI     | Python library built on the official `mcp` SDK v2             |
 | [`mcp-authz-node-example`](apps/node-example)           | —        | Thin Node.js consumer that wires the library to a demo server |
 | [`mcp-authz-python-example`](apps/python-example)       | —        | Thin Python consumer using the official SDK                   |

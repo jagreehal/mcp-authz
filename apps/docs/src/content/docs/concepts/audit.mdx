@@ -96,6 +96,32 @@ dashboards — rather than building a second place to look.
 
 </Aside>
 
+## OpenTelemetry
+
+If your traces already go to a backend, put the events there. `mcp-authz/otel`
+and `mcp_authz.otel` write each event onto the active span as `mcp_authz.*` and
+`security.*` attributes. Pass a secret as `hashKey` / `hash_key` and the sinks
+add HMAC-SHA-256 digests of the subject, email and approver, identical in both
+languages. Without a key they leave those identifiers off.
+
+```ts
+import { createOtelAuthzSinks } from 'mcp-authz/otel';
+
+const { onAudit, onDecision } = createOtelAuthzSinks({ hashKey: env.AUDIT_HASH_KEY });
+```
+
+```python
+import os
+
+from mcp_authz.otel import create_otel_authz_sinks
+
+sinks = create_otel_authz_sinks(hash_key=os.environ["AUDIT_HASH_KEY"])
+```
+
+You initialise the SDK yourself, once per process or Worker isolate.
+`createTracedFetch()` carries the trace to the upstream when you pass it as the
+proxy's `upstream.fetch`.
+
 ## Versioning
 
 A new optional field does not move the `v1`. Changing what an existing field

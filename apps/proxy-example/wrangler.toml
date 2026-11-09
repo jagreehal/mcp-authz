@@ -1,6 +1,10 @@
 name = "mcp-authz-proxy-example"
 main = "dist/worker.js"
 compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability.traces]
+enabled = true
 
 [vars]
 # Public URL of this proxy (token audience).
@@ -12,3 +16,4 @@ OAUTH_JWKS_URI = "https://auth.example.com/.well-known/jwks.json"
 UPSTREAM_URL = "https://vendor.example.com/mcp"
 
 # Set UPSTREAM_TOKEN as a secret: wrangler secret put UPSTREAM_TOKEN
+# Set AUDIT_HASH_KEY as a secret: wrangler secret put AUDIT_HASH_KEY

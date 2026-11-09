@@ -1,4 +1,6 @@
 import { authz, type AuditEvent } from 'mcp-authz';
+import { instrumentMcpServer } from 'autotel-mcp-instrumentation/server';
+import { createOtelAuditSink } from 'mcp-authz/otel';
 import { z } from 'zod';
 import { policy } from './policy';
 
@@ -110,8 +112,28 @@ function logDecision(event: AuditEvent): void {
   console.log(JSON.stringify(event));
 }
 
-export const buildExampleServer = server(tools, {
+const onAudit = createOtelAuditSink({ hashKey: process.env.AUDIT_HASH_KEY });
+
+const createServer = server(tools, {
   name: 'mcp-authz-node-example',
   version: '0.1.0',
-  onAudit: logDecision,
+  emitter: 'mcp-authz-node-example',
+  onAudit: (event) => {
+    logDecision(event);
+    return onAudit(event);
+  },
 });
+
+export const buildExampleServer = Object.assign(
+  (...args: Parameters<typeof createServer>): ReturnType<typeof createServer> =>
+    instrumentMcpServer(createServer(...args), {
+      networkTransport: 'tcp',
+      captureToolArgs: false,
+    }),
+  {
+    permissions: createServer.permissions,
+    routePermissions: createServer.routePermissions,
+    routesFor: createServer.routesFor,
+    permissionForRoute: createServer.permissionForRoute,
+  },
+);

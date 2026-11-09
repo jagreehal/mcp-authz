@@ -1,7 +1,14 @@
 #!/usr/bin/env node
+import { init } from 'autotel';
 import { listenMcp } from 'mcp-authz/node';
 import { devAuthEnv, withDevAuth } from './dev-auth';
 import { mcpFromEnv } from './mcp';
+
+init({
+  service: 'mcp-authz-node-example',
+  sampling: 'development',
+  endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+});
 
 const port = Number(process.env.PORT ?? 8200);
 const devAuth = process.env.MCP_DEV_AUTH === '1';
