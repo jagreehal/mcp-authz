@@ -67,11 +67,14 @@ def _actor_attrs(
     return attrs
 
 
-def create_otel_audit_sink(*, force_keep: bool = True, hash_key: str | None = None) -> AuditSink:
+def create_otel_audit_sink(
+    *, force_keep: bool = True, hash_key: str | None = None, capture_errors: bool = False
+) -> AuditSink:
     """Writes ``mcp_authz.audit.v1`` onto the active span.
 
     With ``hash_key``, identifiers land as keyed digests. Without it, the sink
-    leaves them off the span.
+    leaves them off the span. ``capture_errors=True`` copies the handler's error
+    message onto the span; by default only ``security.outcome`` marks the failure.
     """
 
     hash_value = create_identifier_hasher(hash_key) if hash_key else None
@@ -101,7 +104,7 @@ def create_otel_audit_sink(*, force_keep: bool = True, hash_key: str | None = No
             attrs["mcp_authz.audit.approved_by.hash"] = hash_value(event.approved_by)
         if event.duration_ms is not None:
             attrs["mcp_authz.audit.duration_ms"] = event.duration_ms
-        if event.error is not None:
+        if event.error is not None and capture_errors:
             attrs["mcp_authz.audit.error"] = event.error[:500]
         span.set_attributes(attrs)
         if force_keep:
@@ -139,10 +142,12 @@ def create_otel_decision_sink(*, force_keep: bool = True, hash_key: str | None =
     return sink
 
 
-def create_otel_authz_sinks(*, force_keep: bool = True, hash_key: str | None = None) -> OtelAuthzSinks:
+def create_otel_authz_sinks(
+    *, force_keep: bool = True, hash_key: str | None = None, capture_errors: bool = False
+) -> OtelAuthzSinks:
     """Both sinks for ``on_audit`` / ``on_decision``."""
 
     return {
-        "on_audit": create_otel_audit_sink(force_keep=force_keep, hash_key=hash_key),
+        "on_audit": create_otel_audit_sink(force_keep=force_keep, hash_key=hash_key, capture_errors=capture_errors),
         "on_decision": create_otel_decision_sink(force_keep=force_keep, hash_key=hash_key),
     }

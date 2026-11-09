@@ -98,3 +98,28 @@ def test_audit_sink_noop_without_recording_span() -> None:
             )
         )
     span.set_attributes.assert_not_called()
+
+
+def test_audit_sink_keeps_error_text_off_unless_asked() -> None:
+    event = AuditEvent(
+        call_id="c3",
+        issuer="https://auth.example",
+        sub="user-1",
+        kind="tool",
+        name="get_case",
+        permission="cases:read",
+        decision="allow",
+        phase="failure",
+        at="2026-01-01T00:00:00Z",
+        error="row for alice@acme.com not found",
+    )
+    span, attrs = _mock_span()
+    with patch("mcp_authz.otel.trace.get_current_span", return_value=span):
+        create_otel_audit_sink()(event)
+    assert "mcp_authz.audit.error" not in attrs
+    assert attrs["security.outcome"] == "failure"
+
+    span, attrs = _mock_span()
+    with patch("mcp_authz.otel.trace.get_current_span", return_value=span):
+        create_otel_audit_sink(capture_errors=True)(event)
+    assert attrs["mcp_authz.audit.error"] == "row for alice@acme.com not found"
