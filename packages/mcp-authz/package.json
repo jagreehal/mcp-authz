@@ -68,11 +68,11 @@
   "author": "Jag Reehal <jag@jagreehal.com> (https://jagreehal.com)",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.3.0",
-    "@modelcontextprotocol/server": "^2.3.0",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "awaitly": "6.2.0",
     "cross-spawn": "^7.0.6",
-    "jose": "^6.2.12"
+    "jose": "^6.2.15"
   },
   "peerDependencies": {
     "@modelcontextprotocol/node": "^2.0.0"
@@ -83,7 +83,7 @@
     }
   },
   "devDependencies": {
-    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/node": "^2.1.2",
     "@types/node": "^26.6.4",
     "@typescript/native": "npm:typescript@^7.0.2",
     "ajv": "^8.20.0",
