@@ -15,11 +15,11 @@
     "token": "MCP_DEV_AUTH=1 tsx src/token.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.3.1",
     "autotel": "^9.0.0",
     "autotel-mcp-instrumentation": "^60.0.0",
-    "jose": "^6.2.12",
+    "jose": "^6.2.15",
     "mcp-authz": "workspace:*",
     "zod": "^4.6.5"
   },
