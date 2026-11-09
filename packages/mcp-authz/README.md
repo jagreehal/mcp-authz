@@ -490,7 +490,8 @@ HMAC-SHA-256 digests, which only someone holding the key can match to a person.
 The Python package produces the same digests. Without a key, the sinks leave
 those identifiers off the span. WebCrypto computes the digests, so this works on
 Workers without `nodejs_compat`. Each sink marks its span for autotel tail
-sampling to keep; pass `{ forceKeep: false }` to opt out. `createTracedFetch`
+sampling to keep; pass `{ forceKeep: false }` to opt out. Handler error messages
+stay off the span unless you pass `{ captureErrors: true }`. `createTracedFetch`
 forwards the W3C trace context to the upstream. On Workers, wrap the module with
 `wrapModule` from `autotel-cloudflare`.
 

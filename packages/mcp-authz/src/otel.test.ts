@@ -122,4 +122,30 @@ describe('mcp-authz/otel', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it('keeps error text off the span unless captureErrors is set', async () => {
+    const event: AuditEvent = {
+      type: 'mcp_authz.audit.v1',
+      callId: 'c3',
+      issuer: 'https://auth.example',
+      sub: 'user-1',
+      kind: 'tool',
+      name: 'get_case',
+      permission: 'cases:read',
+      decision: 'allow',
+      phase: 'failure',
+      at: new Date().toISOString(),
+      error: 'row for alice@acme.com not found',
+    };
+    const quiet = mockSpan();
+    vi.spyOn(trace, 'getActiveSpan').mockReturnValue(quiet.span);
+    await createOtelAuditSink()(event);
+    expect(quiet.attributes).not.toHaveProperty('mcp_authz.audit.error');
+    expect(quiet.attributes['security.outcome']).toBe('failure');
+
+    const verbose = mockSpan();
+    vi.spyOn(trace, 'getActiveSpan').mockReturnValue(verbose.span);
+    await createOtelAuditSink({ captureErrors: true })(event);
+    expect(verbose.attributes['mcp_authz.audit.error']).toBe('row for alice@acme.com not found');
+  });
 });

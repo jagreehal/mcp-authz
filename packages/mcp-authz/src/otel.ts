@@ -18,6 +18,11 @@ export type OtelSinkOptions = {
    * it the sinks leave those identifiers off the span.
    */
   hashKey?: string;
+  /**
+   * Copy the handler's error message (first 500 characters) onto the span.
+   * Default false: `security.outcome` still marks the failure.
+   */
+  captureErrors?: boolean;
 };
 
 type Hasher = (value: string) => Promise<string>;
@@ -92,7 +97,7 @@ export function createOtelAuditSink(options?: OtelSinkOptions): AuditSink {
     if (event.resource) attrs['mcp_authz.audit.resource'] = event.resource;
     if (event.approvedBy && hash) attrs['mcp_authz.audit.approved_by.hash'] = await hash(event.approvedBy);
     if (event.durationMs !== undefined) attrs['mcp_authz.audit.duration_ms'] = event.durationMs;
-    if (event.error) attrs['mcp_authz.audit.error'] = event.error.slice(0, 500);
+    if (event.error && options?.captureErrors) attrs['mcp_authz.audit.error'] = event.error.slice(0, 500);
 
     span.setAttributes(attrs);
     if (options?.forceKeep !== false) forceKeepSpan(span);

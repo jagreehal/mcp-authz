@@ -92,6 +92,12 @@ leave those identifiers off.
 Each sink sets `autotel.sampling.tail.keep`. Pass `{ forceKeep: false }`
 (`force_keep=False` in Python) to let your sampler decide.
 
+### Error text stays off spans
+
+A failed call sets `security.outcome` to `failure`. The handler's error message
+can hold personal data, so the sink copies it only with `captureErrors: true`
+(`capture_errors=True` in Python).
+
 ### Carry the trace upstream
 
 In proxy mode, pass `createTracedFetch()` as `upstream.fetch` so the upstream
