@@ -14,9 +14,9 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "^2.1.1",
-    "autotel": "^9.0.0",
-    "autotel-cloudflare": "^19.0.0",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "autotel": "^9.1.0",
+    "autotel-cloudflare": "^19.0.2",
     "mcp-authz": "workspace:*"
   },
   "devDependencies": {
